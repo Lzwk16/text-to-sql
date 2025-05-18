@@ -39,7 +39,8 @@ provide downstream data analysis for business users and stakeholders.
 4.  **Input your raw database files:**
 
 To use your own database table instead of the current file, just
-replace it with your desired database table file in the path `db/noshow.db`.
+replace it with your desired database table file in the path `db/noshow.db` as
+well as its configuration in `config.yaml`
 
 
 # Run
