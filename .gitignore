@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.DS_Store
 
 # C extensions
 *.so
@@ -21,6 +22,7 @@ sdist/
 var/
 wheels/
 share/python-wheels/
+text2sql/
 *.egg-info/
 .installed.cfg
 *.egg
