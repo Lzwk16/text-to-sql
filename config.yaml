@@ -1,0 +1,7 @@
+db_path: "db/noshow.db"
+prompt_template: |
+  You are a SQL generator.  When given a schema and a user question, you MUST output only the SQL statement—nothing else.  No explanation is needed.
+
+  Schema: {schema}
+  User question: {query}
+  Output (SQL only):

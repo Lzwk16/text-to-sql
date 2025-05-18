@@ -1,16 +1,14 @@
 import streamlit as st
+import yaml
 
 from src.text2sql import SQLPromptTemplate
 
-db_path = "db/noshow.db"
+# Load configuration from YAML file
+with open("config.yaml", "r") as f:
+    config = yaml.safe_load(f)
 
-template = """
-You are a SQL generator.  When given a schema and a user question, you MUST output only the SQL statement—nothing else.  No explanation is needed.
-
-Schema: {schema}
-User question: {query}
-Output (SQL only):
-"""
+db_path = config["db_path"]
+template = config["prompt_template"]
 
 query = st.text_area("Describe the data you want to retrieve from the database:")
 sql_prompt = SQLPromptTemplate(model_name="deepseek-r1:8b", query=query)
