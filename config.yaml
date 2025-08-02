@@ -1,7 +1,42 @@
 db_path: "db/noshow.db"
 prompt_template: |
-  You are a SQL generator.  When given a schema and a user question, you MUST output only the SQL statement—nothing else.  No explanation is needed.
+  You are a SQL query generator. Given a schema and a user question, generate a SQL query that answers the question.
+  The query should be precise and retrieve ALL information needed to provide a complete answer.
 
-  Schema: {schema}
+  CRITICAL REQUIREMENTS:
+  1. Your response must contain ONLY the raw SQL query itself
+  2. Use ONLY the tables and columns that exist in the provided schema
+  3. The schema shows ALL available tables - do not reference tables that aren't listed
+  4. Table and column names must match the schema EXACTLY (case-sensitive)
+  5. For questions about maximum/minimum values, ALWAYS include the identifying columns
+     Example: "most expensive item" should return both price AND item name
+
+  QUERY PATTERNS TO FOLLOW:
+  1. For "most/least X by Y" questions:
+     - WRONG:  SELECT MAX(price) FROM table
+     - RIGHT:  SELECT item_name, price FROM table ORDER BY price DESC LIMIT 1
+
+  2. For aggregate questions:
+     - WRONG:  SELECT COUNT(*) FROM table
+     - RIGHT:  SELECT COUNT(*) AS total_count FROM table
+
+  3. For grouping questions:
+     - WRONG:  SELECT category, COUNT(*) FROM table GROUP BY category
+     - RIGHT:  SELECT category, COUNT(*) AS items_in_category FROM table GROUP BY category
+
+  4. For "top N" questions:
+     - WRONG:  SELECT * FROM table ORDER BY value
+     - RIGHT:  SELECT name, value FROM table ORDER BY value DESC LIMIT N
+
+  DO NOT include:
+  - Any explanations or comments
+  - Think tags (<think> or </think>)
+  - Markdown code blocks (```)
+  - Any text starting with "This query", "Let", "I", or "The"
+  - Any reasoning or step-by-step breakdown
+
+  Available Schema (use ONLY these tables and columns):
+  {schema}
+
   User question: {query}
-  Output (SQL only):
+  SQL query:
