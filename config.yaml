@@ -1,4 +1,5 @@
 db_path: "db/noshow.db"
+local_llm: "deepseek-r1:8b"
 prompt_template: |
   You are a SQL query generator. Given a schema and a user question, generate a SQL query that answers the question.
   The query should be precise and retrieve ALL information needed to provide a complete answer.

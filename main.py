@@ -1,6 +1,3 @@
-import os
-import tempfile
-
 import streamlit as st
 import yaml
 
@@ -16,17 +13,6 @@ model = config["local_llm"]
 
 st.title("Natural Language to SQL Query")
 st.write("Ask questions about your data in plain English!")
-
-# Add database file uploader
-uploaded_db = st.file_uploader(
-    "Upload a SQLite database file (optional)", type=["db", "sqlite", "sqlite3"]
-)
-if uploaded_db:
-    # Save the uploaded file temporarily
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp_file:
-        tmp_file.write(uploaded_db.getvalue())
-        db_path = tmp_file.name
 
 # Input for the query
 query = st.text_area("What would you like to know about the data?")
@@ -65,10 +51,3 @@ try:
 
 except Exception as e:
     st.error(f"Error: {str(e)}")
-
-# Cleanup temporary file if it was created
-if uploaded_db and "tmp_file" in locals():
-    try:
-        os.unlink(tmp_file.name)
-    except:
-        pass
