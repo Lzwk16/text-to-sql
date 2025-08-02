@@ -1,3 +1,6 @@
+import os
+import tempfile
+
 import streamlit as st
 import yaml
 
@@ -9,6 +12,7 @@ with open("config.yaml", "r") as f:
 
 db_path = config["db_path"]
 template = config["prompt_template"]
+model = config["local_llm"]
 
 st.title("Natural Language to SQL Query")
 st.write("Ask questions about your data in plain English!")
@@ -19,8 +23,6 @@ uploaded_db = st.file_uploader(
 )
 if uploaded_db:
     # Save the uploaded file temporarily
-    import os
-    import tempfile
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp_file:
         tmp_file.write(uploaded_db.getvalue())
@@ -28,7 +30,7 @@ if uploaded_db:
 
 # Input for the query
 query = st.text_area("What would you like to know about the data?")
-sql_prompt = SQLPromptTemplate(model_name="deepseek-r1:8b", query=query)
+sql_prompt = SQLPromptTemplate(model_name=model, query=query)
 
 try:
     schema = sql_prompt.extract_schema(db_path)
