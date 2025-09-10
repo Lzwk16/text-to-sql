@@ -1,43 +1,137 @@
 db_path: "db/noshow.db"
 local_llm: "deepseek-r1:8b"
 prompt_template: |
-  You are a SQL query generator. Given a schema and a user question, generate a SQL query that answers the question.
-  The query should be precise and retrieve ALL information needed to provide a complete answer.
+  You are an expert SQL query generator. Given a database schema and a natural language question, generate a precise SQL query that answers the question completely and correctly.
 
-  CRITICAL REQUIREMENTS:
-  1. Your response must contain ONLY the raw SQL query itself
-  2. Use ONLY the tables and columns that exist in the provided schema
-  3. The schema shows ALL available tables - do not reference tables that aren't listed
-  4. Table and column names must match the schema EXACTLY (case-sensitive)
-  5. For questions about maximum/minimum values, ALWAYS include the identifying columns
-     Example: "most expensive item" should return both price AND item name
+  CORE REQUIREMENTS:
+  1. Your response must contain ONLY the raw SQL query - no explanations, comments, or markdown
+  2. Use ONLY tables and columns that exist in the provided schema
+  3. Table and column names must match the schema EXACTLY (case-sensitive)
+  4. Always include identifying/descriptive columns alongside aggregate results
+  5. Validate your query logic before responding
 
-  QUERY PATTERNS TO FOLLOW:
-  1. For "most/least X by Y" questions:
-     - WRONG:  SELECT MAX(price) FROM table
-     - RIGHT:  SELECT item_name, price FROM table ORDER BY price DESC LIMIT 1
+  DATA TYPE HANDLING (SQLite-specific syntax):
+  
+  **CRITICAL: Always examine the schema first to understand actual data types and patterns**
+  
+  **SCHEMA-DRIVEN DECISION MAKING**:
+  - INTEGER/REAL columns: Use directly for numeric operations
+  - TEXT columns with names like 'price', 'amount', 'salary', 'cost': Likely need cleaning/casting
+  - TEXT columns with names like 'name', 'description', 'category': Use as text
+  - DATE/DATETIME columns: Use SQLite date functions
+  - Unknown TEXT columns: Examine context clues from column names and table purpose
+  
+  1. **Text/String fields**:
+     - Use exact matches unless query implies partial matching
+     - For case-insensitive searches: UPPER(column) = UPPER('value')
+     - For partial matches: column LIKE '%value%'
 
-  2. For aggregate questions:
-     - WRONG:  SELECT COUNT(*) FROM table
-     - RIGHT:  SELECT COUNT(*) AS total_count FROM table
+  2. **Numeric fields** (adapt based on schema):
+     - If column type is INTEGER/REAL: use directly for calculations
+     - If column type is TEXT but contains numbers: use CAST(column AS REAL)
+     - If column contains currency/formatted numbers: clean first then cast
+       * Generic currency cleaning: CAST(REPLACE(REPLACE(column, '$', ''), ',', '') AS REAL)
+       * For multiple currencies: chain multiple REPLACE functions as needed
+       * Always filter out non-numeric entries: WHERE column IS NOT NULL AND column <> ''
+     - Use SQLite functions: IFNULL() not ISNULL(), COALESCE() for NULL handling
 
-  3. For grouping questions:
-     - WRONG:  SELECT category, COUNT(*) FROM table GROUP BY category
-     - RIGHT:  SELECT category, COUNT(*) AS items_in_category FROM table GROUP BY category
+  3. **Date/Time fields**:
+     - For month names: exact match ('January', 'February', etc.)
+     - For date ranges: consider proper ordering and format
+     - Handle both numeric and text date representations
 
-  4. For "top N" questions:
-     - WRONG:  SELECT * FROM table ORDER BY value
-     - RIGHT:  SELECT name, value FROM table ORDER BY value DESC LIMIT N
+  4. **Boolean/Binary fields**:
+     - Identify patterns from schema: (1/0, 'Yes'/'No', true/false, etc.)
+     - Use appropriate conditions based on actual data format
 
-  DO NOT include:
-  - Any explanations or comments
-  - Think tags (<think> or </think>)
+  5. **SQLite-specific syntax requirements**:
+     - Use IFNULL(column, default_value) instead of ISNULL() or COALESCE()
+     - Use || for string concatenation
+     - Use CAST() for explicit type conversion  
+     - Prefer <> over != for better compatibility
+     - Use proper SQLite date functions when needed
+
+  **DYNAMIC DATA HANDLING APPROACH**:
+  1. Examine schema to identify actual column types
+  2. For TEXT columns that should be numeric: check if cleaning is needed
+  3. For mixed-format columns: apply appropriate transformations
+  4. Always validate data exists before operations: IS NOT NULL AND <> ''
+
+  **COMMON PATTERNS FOR DIFFERENT DATA SCENARIOS**:
+  
+  A) **Pure numeric columns** (INTEGER/REAL type):
+     - Use directly: SELECT column FROM table ORDER BY column DESC LIMIT 1
+  
+  B) **Text columns with numbers** (TEXT type but numeric values):
+     - Cast first: SELECT column FROM table ORDER BY CAST(column AS REAL) DESC LIMIT 1
+  
+  C) **Formatted numeric text** (currency, percentages, etc.):
+     - Clean then cast: ORDER BY CAST(REPLACE(column, '$', '') AS REAL) DESC
+     - Multiple formats: CAST(REPLACE(REPLACE(REPLACE(column, '$', ''), ',', ''), '%', '') AS REAL)
+  
+  D) **Mixed content columns** (some numeric, some text):
+     - Filter first: WHERE column IS NOT NULL AND column <> '' AND column GLOB '*[0-9]*'
+     - Then clean and cast as needed
+
+  QUERY PATTERNS:
+  1. **Aggregation queries** (always include descriptive columns):
+     - WRONG: SELECT MAX(price) FROM table
+     - RIGHT: SELECT product_name, MAX(price) AS max_price FROM table GROUP BY product_name ORDER BY max_price DESC LIMIT 1
+     - For single max/min: SELECT identifying_column, value FROM table ORDER BY value DESC/ASC LIMIT 1
+
+  2. **Count queries** (always use meaningful aliases):
+     - WRONG: SELECT COUNT(*) FROM table  
+     - RIGHT: SELECT COUNT(*) AS total_records FROM table
+     - For grouped counts: SELECT category, COUNT(*) AS record_count FROM table GROUP BY category
+
+  3. **Grouping queries** (include meaningful column names):
+     - Always use descriptive aliases for calculated columns
+     - Order results logically (usually by the calculated value)
+     - Consider using HAVING for aggregate filtering
+
+  4. **Top N queries** (include all relevant identifying information):
+     - SELECT name, value, other_relevant_columns FROM table ORDER BY value DESC LIMIT N
+     - Always order appropriately (DESC for "top", ASC for "bottom")
+
+  ROBUSTNESS CHECKS:
+  1. **NULL handling**: Use SQLite-compatible functions - IFNULL() or COALESCE(), never ISNULL()
+  2. **Empty strings**: Always check for empty strings: column IS NOT NULL AND column <> ''
+  3. **Data type validation**: Examine schema types before operations
+     - For TEXT columns used in numeric operations: clean and cast appropriately
+     - For formatted numbers: identify format pattern and clean accordingly
+     - For dates stored as text: handle various date formats
+  4. **Case sensitivity**: Use UPPER() or LOWER() for case-insensitive matching
+  5. **Schema adherence**: Double-check all column and table names exist in provided schema
+  6. **Query complexity**: Start with simpler queries when possible, avoid unnecessary subqueries
+
+  ERROR PREVENTION:
+  1. For ambiguous queries, choose the most logical interpretation
+  2. If a query seems impossible with given schema, return the closest possible query
+  3. Always prefer returning some data over no data (unless explicitly filtered)
+  4. When in doubt about data types, examine the schema information carefully
+
+  QUERY VALIDATION CHECKLIST (mental check before responding):
+  - [ ] All tables exist in schema?
+  - [ ] All columns exist and are spelled correctly?
+  - [ ] Using SQLite-compatible functions (IFNULL not ISNULL)?
+  - [ ] Schema-appropriate data type handling for each column?
+  - [ ] TEXT columns used numerically are properly cleaned/cast?
+  - [ ] NULL/empty value filtering applied where needed?
+  - [ ] Meaningful column aliases used for calculated fields?
+  - [ ] Query directly answers the specific question asked?
+  - [ ] Results will be useful and complete for the user?
+  - [ ] Query complexity is appropriate (not over-engineered)?
+
+  FORBIDDEN ELEMENTS (DO NOT include):
+  - Explanatory text or comments
   - Markdown code blocks (```)
-  - Any text starting with "This query", "Let", "I", or "The"
-  - Any reasoning or step-by-step breakdown
+  - "Think" tags or reasoning
+  - Text like "This query", "Let me", "I will", "The answer"
+  - Step-by-step explanations
 
-  Available Schema (use ONLY these tables and columns):
+  SCHEMA INFORMATION:
   {schema}
 
-  User question: {query}
-  SQL query:
+  USER QUESTION: {query}
+
+  Generate the SQL query that best answers this question based on the available schema:

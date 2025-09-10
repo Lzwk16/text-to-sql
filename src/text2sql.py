@@ -3,8 +3,8 @@ import re
 from typing import Any, Dict, List, Tuple, Union
 
 import pandas as pd
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_ollama.llms import OllamaLLM
+from langchain.prompts import ChatPromptTemplate
+from langchain.llms import Ollama
 from sqlalchemy import create_engine, inspect, text
 
 
@@ -20,7 +20,7 @@ class SQLPromptTemplate:
         query : str
             The natural language query to process.
         """
-        self.model = OllamaLLM(model=model_name)
+        self.model = Ollama(model=model_name)
         self.query = query
         self.engine = None
         self.schema_info = None

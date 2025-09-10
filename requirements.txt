@@ -1,8 +1,8 @@
 streamlit
-langchain-core
-langchain-community
-langchain-ollama
+langchain==0.1.20
+langchain-community==0.0.38
+langchain-experimental
 SQLAlchemy
 PyYAML
 pandas
-pydantic
+pydantic==1.10.18
