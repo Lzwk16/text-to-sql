@@ -14,26 +14,24 @@ provide downstream data analysis for business users and stakeholders.
     cd <repository_directory>
     ```
 
-2.  **Create a virtual environment:**
+2.  **Install uv package manager:**
 
     ```bash
-    python -m venv venv
-    source venv/bin/activate  # On macOS and Linux
-    venv\Scripts\activate  # On Windows
+    curl -LsSf https://astral.sh/uv/install.sh | sh
     ```
 
 3.  **Install the required packages and applications:**
 
-    Install Ollama on your local machine from the [official website](https://ollama.com/). And then pull the Deepseek model:
+    Install Ollama on your local machine from the [official website](https://ollama.com/). And then pull the Qwen3 model:
 
     ```bash
-    ollama pull deepseek-r1:8b
+    ollama pull qwen3:8b
     ```
 
-    Install required dependencies:
+    Install required dependencies using uv:
 
     ```bash
-    pip install -r requirements.txt
+    uv sync
     ```
 
 4.  **Input your raw database files:**
@@ -44,8 +42,8 @@ well as its configuration in `config.yaml`
 
 
 # Run
-Run the Streamlit app:
+Run the Streamlit app using uv:
 
 ```bash
-streamlit run main.py
+uv run streamlit run main.py
 ```

@@ -143,7 +143,21 @@ class SQLPromptTemplate:
                     constraints.append("NOT NULL")
 
                 constraint_str = f" ({', '.join(constraints)})" if constraints else ""
-                table_info.append(f"  - {col['name']} ({col['type']}){constraint_str}")
+                
+                # Add sample data for TEXT columns to help with format detection
+                sample_str = ""
+                if col['type'] == 'TEXT':
+                    try:
+                        with self.engine.connect() as conn:
+                            sample_query = text(f"SELECT DISTINCT {col['name']} FROM {table_name} WHERE {col['name']} IS NOT NULL AND {col['name']} <> '' LIMIT 3")
+                            sample_results = conn.execute(sample_query).fetchall()
+                            if sample_results:
+                                samples = [str(row[0]) for row in sample_results]
+                                sample_str = f" [samples: {', '.join(samples)}]"
+                    except:
+                        pass  # If sampling fails, just skip it
+                
+                table_info.append(f"  - {col['name']} ({col['type']}){constraint_str}{sample_str}")
 
             formatted_schema.extend(table_info)
             formatted_schema.append("")  # Add blank line between tables
