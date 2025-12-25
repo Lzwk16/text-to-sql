@@ -22,10 +22,10 @@ provide downstream data analysis for business users and stakeholders.
 
 3.  **Install the required packages and applications:**
 
-    Install Ollama on your local machine from the [official website](https://ollama.com/). And then pull the Qwen3 model:
+    Install Ollama on your local machine from the [official website](https://ollama.com/). And then pull the sqlcoder model:
 
     ```bash
-    ollama pull qwen3:8b
+    ollama pull sqlcoder:7b
     ```
 
     Install required dependencies using uv:

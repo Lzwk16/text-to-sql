@@ -9,7 +9,7 @@ description = "A Text-to-SQL application built with Streamlit that converts natu
 authors = [{name = "Author"}]
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.8.1"
+requires-python = ">=3.10.0"
 keywords = ["text-to-sql", "streamlit", "llm", "sql", "natural-language"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -25,13 +25,19 @@ classifiers = [
 
 dependencies = [
     "streamlit",
-    "langchain==0.1.20",
-    "langchain-community==0.0.38", 
-    "langchain-experimental",
+    "langchain>=0.3.0",
+    "langchain-community>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langchain-ollama",
+    "langchain-huggingface",
+    "langchain-classic",
     "SQLAlchemy",
     "PyYAML",
     "pandas",
-    "pydantic==1.10.18",
+    "pydantic>=2.0.0",
+    "faiss-cpu",
+    "rank-bm25",
+    "sentence-transformers",
 ]
 
 [project.urls]
@@ -40,7 +46,13 @@ Repository = "https://github.com/username/text-to-sql"
 Issues = "https://github.com/username/text-to-sql/issues"
 
 [tool.uv]
-dev-dependencies = []
+dev-dependencies = [
+    "black>=24.8.0",
+    "flake8>=7.1.2",
+    "isort>=5.13.2",
+    "pre-commit>=3.5.0",
+    "ruff>=0.14.10",
+]
 
 [project.scripts]
 text-to-sql = "main:main"
