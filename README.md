@@ -32,13 +32,11 @@ flowchart TD
     GEN -->|"CANNOT_ANSWER"| DEC["decline"]
     GEN -->|"SQL"| EXE["execute_sql<br/>guardrail + read-only run"]
     EXE --> RT{"route"}
-    RT -->|"error and attempts left"| GEN
+    RT -->|"error: retry"| GEN
     RT -->|"ok"| PP["postprocess<br/>optional converters"]
-    RT -->|"attempts exhausted"| GU["give_up"]
     PP --> SUM["summarize"]
     SUM --> END1([END])
     DEC --> END2([END])
-    GU --> END3([END])
 ```
 
 - `generate_sql` builds a prompt from the question and the schema of the request's database, then asks the LLM for one query. If the request cannot be answered read-only (a write, or off-topic), the model answers `CANNOT_ANSWER` and the graph ends at `decline` without running anything.
