@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "text-to-sql"
+version = "0.1.0"
+description = "A LangGraph text-to-SQL agent for querying any SQLite .db file in plain English (FastAPI + Streamlit)"
+authors = [{name = "Author"}]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10.0"
+keywords = ["text-to-sql", "streamlit", "llm", "sql", "natural-language"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "streamlit",
+    "langchain>=0.3.0",
+    "langchain-community>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langchain-groq",
+    "langchain-huggingface",
+    "langgraph>=0.2.0",
+    "langgraph-checkpoint-sqlite",
+    "sqlglot>=25.0.0",
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
+    "python-dotenv",
+    "requests",
+    "PyYAML",
+    "pandas",
+    "pydantic>=2.0.0",
+    "faiss-cpu",
+    "rank-bm25",
+    "sentence-transformers",
+]
+
+[project.urls]
+Homepage = "https://github.com/username/text-to-sql"
+Repository = "https://github.com/username/text-to-sql"
+Issues = "https://github.com/username/text-to-sql/issues"
+
+[tool.uv]
+dev-dependencies = [
+    "black>=24.8.0",
+    "flake8>=7.1.2",
+    "isort>=5.13.2",
+    "pre-commit>=3.5.0",
+    "ruff>=0.14.10",
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+markers = ["slow: loads real embedding models (needs network on first run)"]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.setuptools.package-data]
+"src.sql_agent.prompts" = ["*.md"]

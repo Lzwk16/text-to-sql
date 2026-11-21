@@ -1,6 +1,21 @@
+# Prefer `uv sync` (pyproject.toml is the source of truth). Mirror for pip users.
 streamlit
-langchain_core
-langchain_community
-langchain_ollama
-SQLAlchemy
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-core>=0.3.0
+langchain-groq
+langchain-huggingface
+langgraph>=0.2.0
+langgraph-checkpoint-sqlite
+sqlglot>=25.0.0
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+requests
 PyYAML
+pandas
+pydantic>=2.0.0
+faiss-cpu
+rank-bm25
+sentence-transformers

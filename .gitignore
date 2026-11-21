@@ -52,6 +52,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+.flake8
 
 # Translations
 *.mo
@@ -72,6 +73,7 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+docs/
 
 # PyBuilder
 .pybuilder/
@@ -174,3 +176,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Runtime data (user uploads, graph checkpoints)
+temp_uploads/
+data/
+
+#Design docs
+CLAUDE.md
