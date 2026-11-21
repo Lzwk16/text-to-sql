@@ -180,13 +180,8 @@ Runs the agent for one question. An unknown `db_id` returns 404, an unknown conv
 - **Request Body / Inputs**: `{"message": str, "thread_id": str?, "db_id": str?, "conversions": [str]?}`. Omit `conversions` to use `postprocess.default_enabled`.
 - **Response / Expected Output**: `{"thread_id", "answer", "sql", "columns", "rows", "truncated", "failed", "declined", "conversions_applied": [{"column", "converter", "detail"}], "attempts", "trace"}`
 
-## Contributing
+## Known limitations
 
-- Branch from `main` and open a pull request against it.
-- Run `uv run pytest` before pushing. New code needs tests that use the fake LLM, not Groq.
-- Follow the repository formatting: black, isort, ruff and flake8 via pre-commit, line length 88.
-- Keep the invariants in `CLAUDE.md`: never modify the user's database, never share schema or caches across `db_id`s, and never hardcode table or column names.
-
-## License
-
-MIT, as declared in `pyproject.toml`. The repository has no `LICENSE` file yet, so there is nothing to link to.
+- **Large schemas:** on databases with many tables, the retriever may pick extra tables or miss a needed one, which can lead to a declined question or a wrong query. Quality has only been tested on small synthetic databases.
+- **Wide tables:** every column of a selected table is sent to the model, so very wide tables increase prompt size. Lower `retrieval.sample_limit` to reduce it.
+- **Multi-table questions:** each question runs against a single database file, and joins on non-unique keys can inflate counts.
