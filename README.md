@@ -1,6 +1,9 @@
-# Text-to-SQL agent
+# Text to SQL Query AI Assistant Converter
 
-A read-only agent that answers plain-English questions about any SQLite `.db` file by writing, validating and running SQL for you.
+This repository consists of a simple application powered by Streamlit that
+utilises a locally powered Large Language Model that generates SQL querys from
+natural laugange input. It allows you to efficiently create SQl queries to
+provide downstream data analysis for business users and stakeholders, through a read-only agent that answers plain-English questions about any SQLite `.db` file by writing, validating and running SQL for you.
 
 ## Overview
 
@@ -8,18 +11,34 @@ Upload a SQLite database, ask a question, and get the generated SQL, a results t
 
 ## Architecture
 
-Request flow:
+System overview:
 
+```mermaid
+flowchart LR
+    UI["Streamlit UI<br/>app.py"] -->|HTTP| API["FastAPI<br/>api.py"]
+    API --> AG["LangGraph agent<br/>src/sql_agent/"]
+    AG <-->|prompts| LLM["Groq LLM"]
+    AG -->|"schema context"| SP["SchemaProvider<br/>retriever.py"]
+    AG -->|"validated SELECT"| DB[("SQLite file<br/>read-only")]
+    API -->|"uploads"| REG["DatabaseRegistry<br/>db_registry.py"]
+    AG -.->|"history per thread_id"| CK[("Checkpoint DB")]
 ```
-Streamlit (app.py) --HTTP--> FastAPI (api.py) --> LangGraph agent (src/sql_agent/)
 
-START -> generate_sql --CANNOT_ANSWER--> decline -> END
-              |
-              v
-          execute_sql -> route
-          ^                |-- ok ---------> postprocess -> summarize -> END
-          |-- retry -------|   (error, attempts < max_attempts)
-                           '-- exhausted --> give_up -> END
+Agent graph:
+
+```mermaid
+flowchart TD
+    START([START]) --> GEN["generate_sql"]
+    GEN -->|"CANNOT_ANSWER"| DEC["decline"]
+    GEN -->|"SQL"| EXE["execute_sql<br/>guardrail + read-only run"]
+    EXE --> RT{"route"}
+    RT -->|"error and attempts left"| GEN
+    RT -->|"ok"| PP["postprocess<br/>optional converters"]
+    RT -->|"attempts exhausted"| GU["give_up"]
+    PP --> SUM["summarize"]
+    SUM --> END1([END])
+    DEC --> END2([END])
+    GU --> END3([END])
 ```
 
 - `generate_sql` builds a prompt from the question and the schema of the request's database, then asks the LLM for one query. If the request cannot be answered read-only (a write, or off-topic), the model answers `CANNOT_ANSWER` and the graph ends at `decline` without running anything.
@@ -65,14 +84,14 @@ Repository layout:
 Requires Python 3.10 or newer and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/Lzwk16/text-to-sql.git
+git clone <repository_url>
 cd text-to-sql
 curl -LsSf https://astral.sh/uv/install.sh | sh   # skip if uv is installed
 uv sync
-echo "GROQ_API_KEY=your-key" > .env
 ```
 
-Check that `llm.model_name` in `utils/config.yaml` is a model currently available on your Groq account.
+Check that `llm.model_name` in `utils/config.yaml` is a model currently
+available on your Groq account. Ensure GROQ API key is configured.
 
 | Variable | Required (Yes/No) | Description |
 |---|---|---|
