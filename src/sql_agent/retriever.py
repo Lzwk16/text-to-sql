@@ -5,10 +5,25 @@ hybrid FAISS + BM25 retriever, expanded with foreign-key neighbours so join
 tables are never dropped. Every index is private to one database.
 """
 
+import re
 import threading
 from typing import Dict, List, Optional
 
 from utils.schema import TableInfo, introspect
+
+
+_WORD = re.compile(r"[A-Za-z0-9]+")
+
+
+def tokenize(text: str) -> List[str]:
+    """Lowercase alphanumeric tokens; splits quotes, underscores and camelCase.
+
+    BM25's default tokenizer splits on whitespace only, so a quoted DDL name like
+    ``"Cabin Comfort"`` becomes the tokens ``"Cabin`` and ``Comfort"``, which never
+    match the words in a question.
+    """
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
+    return [w.lower() for w in _WORD.findall(spaced)]
 
 
 class SchemaProvider:
@@ -54,7 +69,7 @@ class SchemaProvider:
         dense = FAISS.from_documents(docs, self._embeddings).as_retriever(
             search_kwargs={"k": self.k}
         )
-        sparse = BM25Retriever.from_documents(docs)
+        sparse = BM25Retriever.from_documents(docs, preprocess_func=tokenize)
         sparse.k = self.k
         return EnsembleRetriever(retrievers=[dense, sparse], weights=self.weights)
 
@@ -79,6 +94,15 @@ class SchemaProvider:
                 )
             selected = [by_name[n] for n in dict.fromkeys(names) if n in by_name]
         return "\n\n".join(t.render() for t in selected)
+
+    def is_partial(self, db_id: str, db_path: str) -> bool:
+        """True when ``schema_for`` sends only a subset of the tables."""
+        return len(self.tables(db_id, db_path)) > self.full_schema_max_tables
+
+    def full_schema(self, db_id: str, db_path: str, max_chars: int = 30000) -> Optional[str]:
+        """Every table, or None if that would be too large for a prompt."""
+        text = "\n\n".join(t.render() for t in self.tables(db_id, db_path))
+        return text if len(text) <= max_chars else None
 
     def forget(self, db_id: Optional[str]) -> None:
         with self._lock:

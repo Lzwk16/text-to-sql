@@ -7,34 +7,13 @@ import pandas as pd
 from langchain_core.messages import AIMessage, HumanMessage
 
 from utils.db_registry import DatabaseRegistry
+from src.sql_agent import prompts
 from src.sql_agent.executor import execute_query
 from src.sql_agent.guardrails import GuardrailError, enforce_sql_guardrails
 from src.sql_agent.postprocess import apply_converters, build_converters
 from src.sql_agent.retriever import SchemaProvider
 from src.sql_agent.state import AgentState
 from utils.helpers import clean_sql_output
-
-DEFAULT_PROMPT = """### Task
-Generate one SQLite SELECT query to answer [QUESTION]{question}[/QUESTION].
-The query must be logically correct in all cases implied by the question, including \
-situations where eligibility of records depends on aggregated properties of groups and \
-where selecting a fixed number of records applies independently within each group.
-
-### Rules
-- Output ONLY the SQL query. No markdown, no explanation.
-- If the request cannot be answered with a read-only SELECT on this schema (for \
-example it asks to modify data, or is unrelated to the database), output exactly: \
-CANNOT_ANSWER
-- Use SQLite syntax. Only reference tables and columns that exist in the schema.
-- For text comparisons use case-insensitive matching (LOWER(col) = LOWER('x') or LIKE).
-- Never write INSERT/UPDATE/DELETE/DROP/ALTER; the database is read-only.
-
-### Database Schema
-{db_schema}
-{feedback}
-### Answer
-[SQL]
-"""
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 DECLINE_TOKEN = "CANNOT_ANSWER"
@@ -51,7 +30,7 @@ class AgentNodes:
         registry: DatabaseRegistry,
         schema_provider: SchemaProvider,
         guardrails_cfg: Optional[Dict[str, Any]] = None,
-        prompt_template: str = DEFAULT_PROMPT,
+        prompt_template: Optional[str] = None,
         summary_rows: int = 20,
         postprocess_cfg: Optional[Dict[str, Any]] = None,
     ):
@@ -63,7 +42,7 @@ class AgentNodes:
         self.max_rows = cfg.get("max_rows", 500)
         self.max_attempts = cfg.get("max_attempts", 3)
         self.timeout_s = cfg.get("query_timeout_s", 10)
-        self.prompt_template = prompt_template
+        self.prompt_template = prompt_template or prompts.load("generate_sql")
         self.summary_rows = summary_rows
 
     # -- nodes -----------------------------------------------------------
@@ -76,17 +55,25 @@ class AgentNodes:
 
         feedback = ""
         if state.get("error"):
-            feedback = (
-                "\n### Previous attempt failed\n"
-                f"SQL: {state.get('sql', '')}\n"
-                f"Problem: {state['error']}\n"
-                "Write a corrected query that fixes this problem.\n"
+            feedback = prompts.render(
+                "retry_feedback", sql=state.get("sql", ""), error=state["error"]
             )
-        prompt = self.prompt_template.format(
-            question=question, db_schema=db_schema, feedback=feedback
-        )
-        response = await self.llm.ainvoke([HumanMessage(content=prompt)])
-        text = _THINK_RE.sub("", str(response.content))
+        key = state.get("db_id") or self.registry.default_id
+
+        async def ask(schema_text: str) -> str:
+            prompt = self.prompt_template.format(
+                question=question, db_schema=schema_text, feedback=feedback
+            )
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+            return _THINK_RE.sub("", str(response.content))
+
+        text = await ask(db_schema)
+        if DECLINE_TOKEN in text.upper() and self.schema.is_partial(key, db_path):
+            # Retrieval may have hidden the needed tables; retry once with all
+            # of them (new information) before telling the user we can't help.
+            full = self.schema.full_schema(key, db_path)
+            if full is not None:
+                text = await ask(full)
         if DECLINE_TOKEN in text.upper():
             return {"question": question, "sql": "", "declined": True}
         return {"question": question, "sql": clean_sql_output(text), "declined": False}
@@ -160,11 +147,14 @@ class AgentNodes:
                 f"column '{a['column']}' was converted {a['detail']} ({a['converter']})"
                 for a in applied
             )
-            note = f"Note: {parts}. Those columns now hold plain numbers.\n"
-        prompt = (
-            "Answer the user's question in 1-3 plain sentences, using ONLY the data "
-            f"below.\n{note}Question: {state['question']}\n"
-            f"Rows returned: {len(rows)} (showing up to {self.summary_rows}):\n{sample}"
+            note = prompts.render("conversion_note", parts=parts)
+        prompt = prompts.render(
+            "summarize",
+            note=note,
+            question=state["question"],
+            row_count=len(rows),
+            shown=self.summary_rows,
+            sample=sample,
         )
         response = await self.llm.ainvoke([HumanMessage(content=prompt)])
         answer = str(response.content).strip()

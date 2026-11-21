@@ -1,5 +1,7 @@
 """FastAPI backend: database upload and chat over the LangGraph agent."""
 
+import asyncio
+import contextlib
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -49,6 +51,16 @@ def load_config(path: str = "utils/config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
+async def cleanup_loop(registry: DatabaseRegistry, interval_s: float) -> None:
+    """Delete expired uploads on a schedule, not only when someone uploads."""
+    while True:
+        await asyncio.sleep(interval_s)
+        try:
+            registry.cleanup_expired()
+        except Exception:  # never let a cleanup error kill the loop
+            pass
+
+
 def create_app(config_path: str = "utils/config.yaml", llm=None) -> FastAPI:
     """App factory. Pass ``llm`` to inject a fake model in tests."""
     cfg = load_config(config_path)
@@ -66,6 +78,7 @@ def create_app(config_path: str = "utils/config.yaml", llm=None) -> FastAPI:
         )
         r = cfg.get("retrieval", {})
         provider = SchemaProvider(**r)
+        registry.on_remove = provider.forget
         nodes = AgentNodes(
             llm or build_llm(cfg["llm"]),
             registry,
@@ -79,7 +92,15 @@ def create_app(config_path: str = "utils/config.yaml", llm=None) -> FastAPI:
             app.state.registry = registry
             app.state.provider = provider
             app.state.graph = build_graph(nodes, saver)
-            yield
+            task = asyncio.create_task(
+                cleanup_loop(registry, up.get("cleanup_interval_min", 30) * 60)
+            )
+            try:
+                yield
+            finally:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
     app = FastAPI(title="Text-to-SQL Agent API", lifespan=lifespan)
 

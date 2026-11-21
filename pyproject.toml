@@ -67,3 +67,6 @@ include = ["src*"]
 markers = ["slow: loads real embedding models (needs network on first run)"]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.setuptools.package-data]
+"src.sql_agent.prompts" = ["*.md"]

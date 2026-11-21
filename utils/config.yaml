@@ -2,7 +2,6 @@
 default_db: "db/noshow.db"
 
 # LLM (Groq reads GROQ_API_KEY from the environment / .env).
-# Same model as the reference repo (chat_sql).
 llm:
    model_name: "qwen/qwen3.8-27b"
    model_provider: "groq"
@@ -25,7 +24,8 @@ guardrails:
 uploads:
    dir: "temp_uploads"
    max_mb: 200
-   ttl_hours: 24
+   ttl_hours: 24 # uploads older than this are deleted (checked by modified time)
+   cleanup_interval_min: 30 # how often the server checks; also runs at startup and on upload
 
 checkpoint_db: "data/checkpoints.db"
 

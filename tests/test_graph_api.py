@@ -51,6 +51,10 @@ def test_retry_feeds_error_back(make_client):
     with c:
         r = c.post("/chat", json={"message": "names"}).json()
     assert r["attempts"] == 3 and not r["failed"]
+    assert "### Previous attempt failed" in llm.prompts[1]  # retry_feedback.md
+    assert "SQL: SELECT nope FROM customers" in llm.prompts[1]
+    assert "Write a corrected query" in llm.prompts[1]
+    assert "### Previous attempt failed" not in llm.prompts[0]
     assert "no such column" in llm.prompts[1]
     assert "returned no rows" in llm.prompts[2]
 

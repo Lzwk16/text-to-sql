@@ -1,59 +1,192 @@
-# Text-to-SQL Agent
+# Text-to-SQL agent
 
-Ask questions about any SQLite database in plain English. Upload a `.db` file,
-and the agent writes a read-only SQL query, runs it, retries with the error
-message if it fails, and answers in plain language with a results table and CSV
-download.
+A read-only agent that answers plain-English questions about any SQLite `.db` file by writing, validating and running SQL for you.
 
-It is a [LangGraph](https://langchain-ai.github.io/langgraph/) agent behind a
-FastAPI backend, with a Streamlit client.
+## Overview
+
+Upload a SQLite database, ask a question, and get the generated SQL, a results table (with CSV download) and a short written answer. The agent is a [LangGraph](https://langchain-ai.github.io/langgraph/) state machine served by FastAPI, with a Streamlit client. The LLM is Groq-hosted `qwen/qwen3.8-27b`, configurable in `utils/config.yaml`. The agent never modifies your database.
+
+## Architecture
+
+Request flow:
 
 ```
-Streamlit (app.py) -> FastAPI (api.py) -> generate_sql -> execute_sql -> summarize
-                                              ^-------- retry on error ---'
+Streamlit (app.py) --HTTP--> FastAPI (api.py) --> LangGraph agent (src/sql_agent/)
+
+START -> generate_sql --CANNOT_ANSWER--> decline -> END
+              |
+              v
+          execute_sql -> route
+          ^                |-- ok ---------> postprocess -> summarize -> END
+          |-- retry -------|   (error, attempts < max_attempts)
+                           '-- exhausted --> give_up -> END
 ```
 
-## Safety
+- `generate_sql` builds a prompt from the question and the schema of the request's database, then asks the LLM for one query. If the request cannot be answered read-only (a write, or off-topic), the model answers `CANNOT_ANSWER` and the graph ends at `decline` without running anything.
+- `execute_sql` checks the query with the guardrail, runs it, and sets an error on a guardrail failure, a SQLite error or an empty result. The router then retries with that error text added to the prompt, up to `guardrails.max_attempts` (default 3).
+- `postprocess` applies the optional numeric converters before `summarize`, so the written answer and the table agree.
+- `summarize` writes the answer from at most 20 result rows. Conversation history is kept per `thread_id` in a SQLite checkpoint file.
 
-- Only a single `SELECT` is allowed (checked with sqlglot) and `LIMIT` is capped.
-- Databases are opened read-only, so your file is never modified.
-- Uploads are validated (extension, SQLite header, size) and stored under a random name.
+Read-only safety is layered, and the prompt is never the security boundary:
 
-## Privacy
+1. **Guardrail** (`guardrails.py`, sqlglot): exactly one `SELECT` or `UNION`, no write or DDL statements, and `LIMIT` injected or capped at `guardrails.max_rows`.
+2. **Read-only connection** (`executor.py`): SQLite opened with `mode=ro` and a query timeout.
+3. **Upload validation** (`db_registry.py`): allowed suffix, SQLite magic header and size are checked, and the file is stored under a random name.
 
-The LLM is hosted by Groq. The schema, a few sample rows per table
-(`retrieval.sample_limit`, set to `0` to disable) and up to 20 result rows are
-sent to it. Do not upload data you cannot share with a third party.
+Schema context depends on database size. Databases with 8 tables or fewer send the full schema. Larger ones use a hybrid FAISS (semantic) and BM25 (keyword) retriever, then add foreign-key neighbours of the matches. Each database has its own cache and index, keyed by `db_id`.
 
-## Setup
+Repository layout:
+
+```
+.
+├── api.py                      # FastAPI app factory and endpoints
+├── app.py                      # Streamlit client
+├── src/sql_agent/
+│   ├── graph.py                # LangGraph wiring and routing
+│   ├── nodes.py                # generate / execute / postprocess / summarize / decline / give_up
+│   ├── prompts/                # LLM prompt templates as .md files (generate_sql, retry_feedback, summarize, conversion_note)
+│   ├── state.py                # AgentState shared by all nodes
+│   ├── guardrails.py           # sqlglot SELECT-only validation, LIMIT cap
+│   ├── executor.py             # read-only SQLite connection, query timeout
+│   ├── retriever.py            # per-database schema context (full or hybrid retrieval)
+│   └── postprocess/            # optional numeric converters (e.g. currency)
+├── utils/
+│   ├── config.yaml             # all settings
+│   ├── llm.py                  # builds the chat model (Groq by default)
+│   ├── schema.py               # introspects tables, foreign keys, sample rows
+│   ├── db_registry.py          # upload validation, db_id to path, TTL cleanup
+│   └── helpers.py              # SQL output cleaning, currency parsing helpers
+├── db/                         # sample databases
+└── tests/                      # pytest suite (fake LLM, fixture databases)
+```
+
+## Installation & Setup
+
+Requires Python 3.10 or newer and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh   # install uv
+git clone https://github.com/Lzwk16/text-to-sql.git
+cd text-to-sql
+curl -LsSf https://astral.sh/uv/install.sh | sh   # skip if uv is installed
 uv sync
 echo "GROQ_API_KEY=your-key" > .env
 ```
 
-Check that `llm.model_name` in `utils/config.yaml` is a model currently available on Groq.
+Check that `llm.model_name` in `utils/config.yaml` is a model currently available on your Groq account.
 
-## Run
+| Variable | Required (Yes/No) | Description |
+|---|---|---|
+| `GROQ_API_KEY` | Yes | Groq credential, read from the environment or `.env`. Never commit `.env`. |
+| `API_BASE_URL` | No | Backend URL the Streamlit client calls. Default `http://127.0.0.1:8000`. |
+| `CHAT_TIMEOUT_S` | No | Seconds the client waits for a `/chat` response. Default `90`. |
+
+To change what the LLM is told, edit the Markdown templates in `src/sql_agent/prompts/`. Placeholders use `{name}` syntax, and a literal brace must be written `{{` or `}}`.
+
+| Template | Used by | Placeholders |
+|---|---|---|
+| `generate_sql.md` | `generate_sql`: writes the query, and holds the `CANNOT_ANSWER` rule | `question`, `db_schema`, `feedback` |
+| `retry_feedback.md` | `generate_sql` on a retry: the failed SQL and its error | `sql`, `error` |
+| `summarize.md` | `summarize`: writes the plain-English answer | `note`, `question`, `row_count`, `shown`, `sample` |
+| `conversion_note.md` | `summarize`: names columns the converters changed | `parts` |
+
+Keep `CANNOT_ANSWER` in `generate_sql.md`, because the decline path depends on that exact word. Run `uv run pytest` after editing a template, since the tests check the retry text.
+
+Edit `utils/config.yaml` for everything else:
+
+| Key | Description |
+|---|---|
+| `default_db` | Sample database served when a request has no `db_id` (`db/noshow.db`). |
+| `llm` | `model_name`, `model_provider` (`groq`), `temperature`. |
+| `retrieval` | `sample_limit` (sample rows per table sent to the LLM, `0` disables), `full_schema_max_tables`, `k`, hybrid weights, embedding model. Currently WIP|
+| `guardrails` | `max_rows`, `max_attempts`, `query_timeout_s`. |
+| `uploads` | `dir`, `max_mb`, `ttl_hours` (uploads unused for this long are deleted), `cleanup_interval_min` (how often the server checks for expired uploads). |
+| `checkpoint_db` | SQLite file for conversation history. |
+| `postprocess` | `default_enabled` converters and per-converter settings such as currency rates. |
+
+Uploaded files survive a server restart: at startup the server re-registers files in `uploads.dir`, so existing `db_id` values keep working, and deletes any older than `ttl_hours`. The same cleanup runs every `cleanup_interval_min` minutes and after each upload. An upload counts as expired `ttl_hours` after it was last used (any schema or chat request) or saved, whichever is later. Last use is tracked in memory only, so after a restart the age falls back to when the file was saved.
+
+The embedding model downloads on first use, and only when a database has more than `full_schema_max_tables` tables.
+
+## Usage
 
 ```bash
-uv run uvicorn api:app --reload      # backend, port 8000
-uv run streamlit run app.py          # UI
+uv run uvicorn api:app --reload      # backend on :8000
+uv run streamlit run app.py          # UI, in a second terminal
 ```
 
-Set `API_BASE_URL` if the backend is not at `http://127.0.0.1:8000`. Without an
-upload, the UI uses the sample database `db/noshow.db`.
+Run both commands from the repository root, because the paths in `utils/config.yaml` are relative to it.
 
-## Test
+1. Open the Streamlit page, upload a `.db`, `.sqlite` or `.sqlite3` file in the sidebar and click **Load database**. Skip this step to use the sample database.
+2. Ask a question in the chat box. The page shows the answer, the results table, a CSV download, and an expander with the generated SQL and every attempt.
+3. Click **New conversation** to clear the history for the current database.
+
+Call the API directly with curl:
 
 ```bash
-uv run pytest
+curl -X POST http://127.0.0.1:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "How many rows are in each table?"}'
 ```
 
-Tests use a fake LLM and do not need an API key.
+**Numeric conversions.** Some databases store numbers as text, such as `USD$ 12.30`. Pick converters in the sidebar multi-select, or send `"conversions": ["currency"]` to `/chat`. Each converter detects its own columns and does nothing when a result has none. Conversions change only the returned rows, never your database. They help only when the query returns the raw text column, because an aggregate such as `AVG(price)` runs in SQLite on the text before conversion.
 
-## Configuration
+**Privacy.** Groq is a cloud API. The schema, sample rows (`retrieval.sample_limit`) and up to 20 result rows are sent to it. Do not upload data you cannot share with a third party.
 
-See `utils/config.yaml` for the model, schema retrieval, guardrails, upload limits and
-optional currency post-processing of result tables (off by default).
+### Test
+
+```bash
+uv run pytest                        # all tests
+uv run pytest -m "not slow"          # skip tests that load the real embedding model
+```
+
+Tests use a fake LLM and fixture databases, so they need no API key. Tests marked `slow` load the real embedding model and need network access on the first run.
+
+## API Reference
+
+The backend also serves interactive OpenAPI docs at `http://127.0.0.1:8000/docs`.
+
+### GET /health
+
+Reports that the backend is running.
+
+- **Request Body / Inputs**: none
+- **Response / Expected Output**: `{"status": "ok"}`
+
+### GET /conversions
+
+Lists the configured numeric converters, for the UI multi-select.
+
+- **Request Body / Inputs**: none
+- **Response / Expected Output**: `{"available": [{"name", "label"}], "default": [names]}`
+
+### POST /upload-db
+
+Validates and stores an uploaded SQLite file, and returns its identifier. Invalid files return 400.
+
+- **Request Body / Inputs**: multipart form with `file` (`.db`, `.sqlite` or `.sqlite3`, within `uploads.max_mb`)
+- **Response / Expected Output**: `{"db_id": "<12-char id>"}`
+
+### GET /schema
+
+Lists the tables of a database. An unknown `db_id` returns 404.
+
+- **Request Body / Inputs**: query parameter `db_id` (optional, defaults to the sample database)
+- **Response / Expected Output**: `{"tables": [{"name", "columns": [..], "rows": int}]}`
+
+### POST /chat
+
+Runs the agent for one question. An unknown `db_id` returns 404, an unknown conversion name returns 400, and a workflow error returns 500.
+
+- **Request Body / Inputs**: `{"message": str, "thread_id": str?, "db_id": str?, "conversions": [str]?}`. Omit `conversions` to use `postprocess.default_enabled`.
+- **Response / Expected Output**: `{"thread_id", "answer", "sql", "columns", "rows", "truncated", "failed", "declined", "conversions_applied": [{"column", "converter", "detail"}], "attempts", "trace"}`
+
+## Contributing
+
+- Branch from `main` and open a pull request against it.
+- Run `uv run pytest` before pushing. New code needs tests that use the fake LLM, not Groq.
+- Follow the repository formatting: black, isort, ruff and flake8 via pre-commit, line length 88.
+- Keep the invariants in `CLAUDE.md`: never modify the user's database, never share schema or caches across `db_id`s, and never hardcode table or column names.
+
+## License
+
+MIT, as declared in `pyproject.toml`. The repository has no `LICENSE` file yet, so there is nothing to link to.
