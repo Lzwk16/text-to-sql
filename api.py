@@ -1,0 +1,178 @@
+"""FastAPI backend: database upload and chat over the LangGraph agent."""
+
+import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import yaml
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from langchain_core.messages import HumanMessage
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from pydantic import BaseModel
+
+from utils.db_registry import DatabaseRegistry, InvalidDatabase
+from src.sql_agent.graph import build_graph
+from utils.llm import build_llm
+from src.sql_agent.nodes import AgentNodes
+from src.sql_agent.postprocess import UnknownConverter, available, validate_names
+from src.sql_agent.retriever import SchemaProvider
+
+load_dotenv()
+
+
+class ChatRequest(BaseModel):
+    message: str
+    thread_id: Optional[str] = None
+    db_id: Optional[str] = None
+    # Converter names to apply; None -> postprocess.default_enabled from config
+    conversions: Optional[List[str]] = None
+
+
+class ChatResponse(BaseModel):
+    thread_id: str
+    answer: str
+    sql: str
+    columns: List[str]
+    rows: List[Dict[str, Any]]
+    truncated: bool
+    failed: bool
+    declined: bool = False
+    conversions_applied: List[Dict[str, str]] = []
+    attempts: int
+    trace: List[str]
+
+
+def load_config(path: str = "utils/config.yaml") -> dict:
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+def create_app(config_path: str = "utils/config.yaml", llm=None) -> FastAPI:
+    """App factory. Pass ``llm`` to inject a fake model in tests."""
+    cfg = load_config(config_path)
+    pp_cfg = cfg.get("postprocess", {})
+    pp_defaults = validate_names(pp_cfg.get("default_enabled", []))  # fail fast
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        up = cfg.get("uploads", {})
+        registry = DatabaseRegistry(
+            upload_dir=up.get("dir", "temp_uploads"),
+            max_bytes=up.get("max_mb", 200) * 1024 * 1024,
+            ttl_s=int(up.get("ttl_hours", 24) * 3600),
+            default_db=cfg.get("default_db"),
+        )
+        r = cfg.get("retrieval", {})
+        provider = SchemaProvider(**r)
+        nodes = AgentNodes(
+            llm or build_llm(cfg["llm"]),
+            registry,
+            provider,
+            cfg.get("guardrails"),
+            postprocess_cfg=pp_cfg,
+        )
+        ckpt = Path(cfg.get("checkpoint_db", "data/checkpoints.db"))
+        ckpt.parent.mkdir(parents=True, exist_ok=True)
+        async with AsyncSqliteSaver.from_conn_string(str(ckpt)) as saver:
+            app.state.registry = registry
+            app.state.provider = provider
+            app.state.graph = build_graph(nodes, saver)
+            yield
+
+    app = FastAPI(title="Text-to-SQL Agent API", lifespan=lifespan)
+
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
+
+    @app.get("/conversions")
+    async def conversions():
+        return {"available": available(pp_cfg), "default": pp_defaults}
+
+    @app.post("/upload-db")
+    async def upload_db(file: UploadFile = File(...)):
+        registry: DatabaseRegistry = app.state.registry
+        content = await file.read(registry.max_bytes + 1)
+        try:
+            db_id = registry.add_upload(file.filename or "", content)
+        except InvalidDatabase as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        registry.cleanup_expired()
+        return {"db_id": db_id}
+
+    @app.get("/schema")
+    async def schema(db_id: Optional[str] = None):
+        try:
+            path = app.state.registry.resolve(db_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        key = db_id or app.state.registry.default_id
+        tables = app.state.provider.tables(key, str(path))
+        return {
+            "tables": [
+                {"name": t.name, "columns": t.columns, "rows": t.row_count}
+                for t in tables
+            ]
+        }
+
+    @app.post("/chat", response_model=ChatResponse)
+    async def chat(req: ChatRequest):
+        try:
+            app.state.registry.resolve(req.db_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        thread_id = req.thread_id or f"session_{uuid.uuid4().hex[:8]}"
+        try:
+            conversions = (
+                pp_defaults
+                if req.conversions is None
+                else validate_names(req.conversions)
+            )
+        except UnknownConverter as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        # Reset per-turn fields: the checkpointer persists state across turns.
+        inputs = {
+            "messages": [HumanMessage(content=req.message)],
+            "question": req.message,
+            "db_id": req.db_id,
+            "sql": "",
+            "error": None,
+            "attempts": 0,
+            "rows": [],
+            "columns": [],
+            "truncated": False,
+            "failed": False,
+            "declined": False,
+            "conversions": conversions,
+            "conversions_applied": [],
+            "answer": "",
+            "trace": [],
+        }
+        try:
+            final = await app.state.graph.ainvoke(
+                inputs, config={"configurable": {"thread_id": thread_id}}
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Workflow failed: {exc}")
+
+        rows, columns = final.get("rows", []), final.get("columns", [])
+        return ChatResponse(
+            thread_id=thread_id,
+            answer=final.get("answer", ""),
+            sql=final.get("sql", ""),
+            columns=columns,
+            rows=rows,
+            truncated=final.get("truncated", False),
+            failed=final.get("failed", False),
+            declined=final.get("declined", False),
+            conversions_applied=final.get("conversions_applied", []),
+            attempts=final.get("attempts", 0),
+            trace=final.get("trace", []),
+        )
+
+    return app
+
+
+app = create_app()

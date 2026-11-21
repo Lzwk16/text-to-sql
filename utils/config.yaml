@@ -1,0 +1,45 @@
+# Optional sample database served when a request has no db_id
+default_db: "db/noshow.db"
+
+# LLM (Groq reads GROQ_API_KEY from the environment / .env).
+# Same model as the reference repo (chat_sql).
+llm:
+   model_name: "qwen/qwen3.8-27b"
+   model_provider: "groq"
+   temperature: 0
+
+# Schema context sent to the LLM
+retrieval:
+   sample_limit: 3 # sample rows per table sent to the cloud LLM; 0 disables
+   full_schema_max_tables: 8 # at or below this, send the whole schema
+   k: 5 # tables retrieved for larger schemas (plus FK neighbours)
+   dense_weight: 0.3
+   sparse_weight: 0.7
+   embedding_model: "all-MiniLM-L6-v2"
+
+guardrails:
+   max_rows: 500
+   max_attempts: 3
+   query_timeout_s: 10
+
+uploads:
+   dir: "temp_uploads"
+   max_mb: 200
+   ttl_hours: 24
+
+checkpoint_db: "data/checkpoints.db"
+
+# Optional, non-mutating conversion of numbers stored as text in result columns.
+# Each converter below auto-detects its own columns and does nothing when a
+# result has none, so it is safe on any database.
+# `default_enabled` lists converters that are on when a request does not choose;
+# the UI multi-select / API field `conversions` overrides it per request.
+postprocess:
+   default_enabled: []
+   currency: # 'USD$ 12.30' -> number in base_currency. Rates are static, relative to base.
+      base_currency: "SGD"
+      conversion_rates:
+         SGD: 1.0
+         USD: 1.35
+         EUR: 1.45
+         GBP: 1.70

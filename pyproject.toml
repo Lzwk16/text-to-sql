@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "text-to-sql"
 version = "0.1.0"
-description = "A Text-to-SQL application built with Streamlit that converts natural language queries into SQL queries using a local LLM"
+description = "A LangGraph text-to-SQL agent for querying any SQLite .db file in plain English (FastAPI + Streamlit)"
 authors = [{name = "Author"}]
 readme = "README.md"
 license = {text = "MIT"}
@@ -16,8 +16,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -28,10 +26,16 @@ dependencies = [
     "langchain>=0.3.0",
     "langchain-community>=0.3.0",
     "langchain-core>=0.3.0",
-    "langchain-ollama",
+    "langchain-groq",
     "langchain-huggingface",
-    "langchain-classic",
-    "SQLAlchemy",
+    "langgraph>=0.2.0",
+    "langgraph-checkpoint-sqlite",
+    "sqlglot>=25.0.0",
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
+    "python-dotenv",
+    "requests",
     "PyYAML",
     "pandas",
     "pydantic>=2.0.0",
@@ -52,7 +56,14 @@ dev-dependencies = [
     "isort>=5.13.2",
     "pre-commit>=3.5.0",
     "ruff>=0.14.10",
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
 ]
 
-[project.scripts]
-text-to-sql = "main:main"
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+markers = ["slow: loads real embedding models (needs network on first run)"]
+testpaths = ["tests"]
+pythonpath = ["."]
