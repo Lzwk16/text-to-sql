@@ -6,8 +6,7 @@ message if it fails, and answers in plain language with a results table and CSV
 download.
 
 It is a [LangGraph](https://langchain-ai.github.io/langgraph/) agent behind a
-FastAPI backend, with a Streamlit client. The design follows
-[chat_sql](https://github.com/SubhamParajuli/chat_sql).
+FastAPI backend, with a Streamlit client.
 
 ```
 Streamlit (app.py) -> FastAPI (api.py) -> generate_sql -> execute_sql -> summarize
