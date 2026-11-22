@@ -11,6 +11,6 @@ The query must be logically correct in all cases implied by the question, includ
 
 ### Database Schema
 {db_schema}
-{conversion_hints}{feedback}
+{conversion_hints}{history}{feedback}
 ### Answer
 [SQL]

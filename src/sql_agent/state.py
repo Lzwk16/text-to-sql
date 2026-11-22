@@ -20,6 +20,7 @@ class AgentState(TypedDict, total=False):
     failed: bool
     declined: bool  # model said the request can't be answered read-only
     conversions: List[str]  # converter names enabled for this request
+    history: List[Dict[str, Any]]  # earlier successful turns; persisted per thread
     conversion_options: Dict[str, Dict[str, str]]  # per-converter settings chosen
     conversions_applied: List[Dict[str, str]]  # columns actually converted
     trace: List[str]  # human-readable log of each attempt
