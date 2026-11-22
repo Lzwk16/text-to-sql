@@ -1,7 +1,7 @@
 # Text to SQL Query AI Assistant Converter
 
 This repository consists of a simple application powered by Streamlit that
-utilises a locally powered Large Language Model that generates SQL querys from
+utilises an open source Large Language Model that generates SQL querys from
 natural laugange input. It allows you to efficiently create SQl queries to
 provide downstream data analysis for business users and stakeholders, through a read-only agent that answers plain-English questions about any SQLite `.db` file by writing, validating and running SQL for you.
 
