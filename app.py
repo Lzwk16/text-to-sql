@@ -49,25 +49,58 @@ with st.sidebar:
         conv = {"available": [], "default": []}
     labels = {c["name"]: c["label"] for c in conv["available"]}
     ss.conversions = st.multiselect(
-        "Convert numbers stored as text",
+        "Convert values stored as text",
         options=list(labels),
         default=[n for n in conv["default"] if n in labels],
         format_func=lambda n: labels.get(n, n),
         help=(
-            "For databases that store values as text like 'USD$ 12.30'. Each "
-            "converter only changes result columns it recognizes, using the "
-            "targets in utils/config.yaml; other databases are unaffected. Your data "
+            "For databases that store values as text, such as 'USD$ 12.30', "
+            "'5 kg' or '05/10/1973'. Pick 'Auto-detect' to use whatever this "
+            "database needs. Each converter only changes columns it recognizes, "
+            "and also works inside the SQL (sums, averages, sorting). Your data "
             "is not modified."
         ),
     )
+
+    # Per-converter settings (target units, date order, ...). Shown for the chosen
+    # converters; "auto" may enable any of them, so it shows all.
+    options_by_name = {c["name"]: c.get("options", []) for c in conv["available"]}
+    shown = (
+        [n for n in options_by_name if options_by_name[n]]
+        if "auto" in ss.conversions
+        else [n for n in ss.conversions if options_by_name.get(n)]
+    )
+    ss.conversion_options = {}
+    if shown:
+        with st.expander("Conversion settings"):
+            for name in shown:
+                st.caption(labels.get(name, name))
+                for opt in options_by_name[name]:
+                    choice = st.selectbox(
+                        opt["label"],
+                        opt["choices"],
+                        index=opt["choices"].index(opt["default"]),
+                        key=f"opt_{name}_{opt['key']}",
+                    )
+                    if choice != opt["default"]:
+                        ss.conversion_options.setdefault(name, {})[opt["key"]] = choice
 
     st.write(f"**Active:** {ss.db_name}")
     try:
         sch = requests.get(f"{API}/schema", params={"db_id": ss.db_id}, timeout=30)
         if sch.ok:
-            for t in sch.json()["tables"]:
+            body = sch.json()
+            for t in body["tables"]:
                 with st.expander(f"{t['name']} ({t['rows']} rows)"):
                     st.write(", ".join(t["columns"]))
+            if body.get("convertible"):
+                st.caption(
+                    "Convertible columns detected: "
+                    + ", ".join(
+                        f"{c['table']}.{c['column']} ({c['converter']})"
+                        for c in body["convertible"]
+                    )
+                )
     except requests.RequestException:
         st.error("Backend unreachable. Start it with: uvicorn api:app")
 
@@ -121,6 +154,7 @@ if question := st.chat_input("Ask a question about your data"):
                         "thread_id": ss.thread_id,
                         "db_id": ss.db_id,
                         "conversions": list(ss.conversions),
+                        "conversion_options": ss.conversion_options,
                     },
                     timeout=CHAT_TIMEOUT,
                 )

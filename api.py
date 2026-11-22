@@ -18,7 +18,13 @@ from utils.db_registry import DatabaseRegistry, InvalidDatabase
 from src.sql_agent.graph import build_graph
 from utils.llm import build_llm
 from src.sql_agent.nodes import AgentNodes
-from src.sql_agent.postprocess import UnknownConverter, available, validate_names
+from src.sql_agent.postprocess import (
+    UnknownConverter,
+    available,
+    build_all,
+    validate_names,
+    validate_options,
+)
 from src.sql_agent.retriever import SchemaProvider
 
 load_dotenv()
@@ -30,6 +36,8 @@ class ChatRequest(BaseModel):
     db_id: Optional[str] = None
     # Converter names to apply; None -> postprocess.default_enabled from config
     conversions: Optional[List[str]] = None
+    # Per-converter settings, e.g. {"units": {"length": "mi"}}; see GET /conversions
+    conversion_options: Optional[Dict[str, Dict[str, str]]] = None
 
 
 class ChatResponse(BaseModel):
@@ -136,11 +144,15 @@ def create_app(config_path: str = "utils/config.yaml", llm=None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc))
         key = db_id or app.state.registry.default_id
         tables = app.state.provider.tables(key, str(path))
+        convertible = app.state.provider.convertible(
+            key, str(path), build_all(pp_cfg)
+        )
         return {
             "tables": [
                 {"name": t.name, "columns": t.columns, "rows": t.row_count}
                 for t in tables
-            ]
+            ],
+            "convertible": [d.as_dict() for d in convertible],
         }
 
     @app.post("/chat", response_model=ChatResponse)
@@ -156,6 +168,7 @@ def create_app(config_path: str = "utils/config.yaml", llm=None) -> FastAPI:
                 if req.conversions is None
                 else validate_names(req.conversions)
             )
+            options = validate_options(pp_cfg, req.conversion_options)
         except UnknownConverter as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         # Reset per-turn fields: the checkpointer persists state across turns.
@@ -172,6 +185,7 @@ def create_app(config_path: str = "utils/config.yaml", llm=None) -> FastAPI:
             "failed": False,
             "declined": False,
             "conversions": conversions,
+            "conversion_options": options,
             "conversions_applied": [],
             "answer": "",
             "trace": [],

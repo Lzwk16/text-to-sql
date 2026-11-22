@@ -9,6 +9,8 @@ import re
 import threading
 from typing import Dict, List, Optional
 
+from src.sql_agent.postprocess.base import Converter, Detected
+from src.sql_agent.postprocess.detect import detect_columns
 from utils.schema import TableInfo, introspect
 
 
@@ -43,6 +45,7 @@ class SchemaProvider:
         self.embedding_model = embedding_model
         self._tables: Dict[str, List[TableInfo]] = {}
         self._retrievers: Dict[str, object] = {}
+        self._detected: Dict[tuple, List[Detected]] = {}
         self._embeddings = None
         self._lock = threading.Lock()
 
@@ -73,8 +76,26 @@ class SchemaProvider:
         sparse.k = self.k
         return EnsembleRetriever(retrievers=[dense, sparse], weights=self.weights)
 
+    def convertible(
+        self, db_id: str, db_path: str, converters: List[Converter]
+    ) -> List[Detected]:
+        """Columns that some converter recognises; scanned once per database."""
+        key = (db_id, tuple(c.cache_key for c in converters))
+        with self._lock:
+            if key not in self._detected:
+                self._detected[key] = detect_columns(db_path, converters)
+            return self._detected[key]
+
     def schema_for(self, db_id: str, db_path: str, question: str) -> str:
         """Schema text relevant to ``question`` for the given database."""
+        return "\n\n".join(
+            t.render() for t in self.select_tables(db_id, db_path, question)
+        )
+
+    def select_tables(
+        self, db_id: str, db_path: str, question: str
+    ) -> List[TableInfo]:
+        """The tables shown to the model for ``question``."""
         tables = self.tables(db_id, db_path)
         if len(tables) <= self.full_schema_max_tables:
             selected = tables
@@ -93,7 +114,7 @@ class SchemaProvider:
                     t.name for t in tables if n in t.referenced_tables
                 )
             selected = [by_name[n] for n in dict.fromkeys(names) if n in by_name]
-        return "\n\n".join(t.render() for t in selected)
+        return selected
 
     def is_partial(self, db_id: str, db_path: str) -> bool:
         """True when ``schema_for`` sends only a subset of the tables."""
@@ -108,3 +129,5 @@ class SchemaProvider:
         with self._lock:
             self._tables.pop(db_id, None)
             self._retrievers.pop(db_id, None)
+            for key in [k for k in self._detected if k[0] == db_id]:
+                del self._detected[key]
