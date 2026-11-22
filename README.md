@@ -28,10 +28,10 @@ Agent graph:
 
 ```mermaid
 flowchart TD
-    START([START]) --> GEN["generate_sql"]
+    START([START]) --> GEN["Generate SQL Query"]
     GEN -->|"CANNOT_ANSWER"| DEC["decline"]
-    GEN -->|"SQL"| EXE["execute_sql<br/>guardrail + read-only run"]
-    EXE --> RT{"route"}
+    GEN -->|"SQL"| EXE["Execute SQL query"]
+    EXE --> RT{"Result ok?"}
     RT -->|"error: retry"| GEN
     RT -->|"ok"| PP["postprocess<br/>optional converters"]
     PP --> SUM["summarize"]
@@ -40,7 +40,7 @@ flowchart TD
 ```
 
 - `generate_sql` builds a prompt from the question and the schema of the request's database, then asks the LLM for one query. If the request cannot be answered read-only (a write, or off-topic), the model answers `CANNOT_ANSWER` and the graph ends at `decline` without running anything.
-- `execute_sql` checks the query with the guardrail, runs it, and sets an error on a guardrail failure, a SQLite error or an empty result. The router then retries with that error text added to the prompt, up to `guardrails.max_attempts` (default 3).
+- `execute_sql` checks the query with the guardrail, runs it, and sets an error on a guardrail failure, a SQLite error or an empty result. The router then retries with that error text added to the prompt, up to `agent_loop.max_attempts` (default 3).
 - `postprocess` applies the optional numeric converters before `summarize`, so the written answer and the table agree.
 - `summarize` writes the answer from at most 20 result rows. Conversation history is kept per `thread_id` in a SQLite checkpoint file.
 
@@ -114,8 +114,9 @@ Edit `utils/config.yaml` for everything else:
 |---|---|
 | `default_db` | Sample database served when a request has no `db_id` (`db/noshow.db`). |
 | `llm` | `model_name`, `model_provider` (`groq`), `temperature`. |
-| `retrieval` | `sample_limit` (sample rows per table sent to the LLM, `0` disables), `full_schema_max_tables`, `k`, hybrid weights, embedding model. Currently WIP|
-| `guardrails` | `max_rows`, `max_attempts`, `query_timeout_s`. |
+| `retrieval` | `sample_limit` (sample rows per table sent to the LLM, `0` disables), `full_schema_max_tables`, `k`, hybrid weights, embedding model. The hybrid settings apply only to databases above the table cutoff and are experimental; see Known limitations. |
+| `guardrails` | `max_rows`, `query_timeout_s`. |
+| `agent_loop` | `max_attempts`: SQL generation attempts per question. |
 | `uploads` | `dir`, `max_mb`, `ttl_hours` (uploads unused for this long are deleted), `cleanup_interval_min` (how often the server checks for expired uploads). |
 | `checkpoint_db` | SQLite file for conversation history. |
 | `postprocess` | `default_enabled` converters and per-converter settings such as currency rates. |

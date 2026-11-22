@@ -79,7 +79,8 @@ def make_client(tmp_path):
             "default_db": str(db),
             "llm": {"model_name": "x", "model_provider": "groq"},
             "retrieval": {"sample_limit": 0},
-            "guardrails": {"max_rows": 100, "max_attempts": 3},
+            "guardrails": {"max_rows": 100},
+            "agent_loop": {"max_attempts": 3},
             "uploads": {"dir": str(tmp_path / "up"), "max_mb": 1},
             "checkpoint_db": str(tmp_path / "ck.db"),
             "postprocess": {

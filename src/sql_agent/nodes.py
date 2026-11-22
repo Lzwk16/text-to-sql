@@ -33,14 +33,16 @@ class AgentNodes:
         prompt_template: Optional[str] = None,
         summary_rows: int = 20,
         postprocess_cfg: Optional[Dict[str, Any]] = None,
+        agent_loop_cfg: Optional[Dict[str, Any]] = None,
     ):
         cfg = guardrails_cfg or {}
+        loop = agent_loop_cfg or {}
         self.postprocess_cfg = postprocess_cfg or {}
         self.llm = llm
         self.registry = registry
         self.schema = schema_provider
         self.max_rows = cfg.get("max_rows", 500)
-        self.max_attempts = cfg.get("max_attempts", 3)
+        self.max_attempts = loop.get("max_attempts", 3)
         self.timeout_s = cfg.get("query_timeout_s", 10)
         self.prompt_template = prompt_template or prompts.load("generate_sql")
         self.summary_rows = summary_rows

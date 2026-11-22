@@ -15,7 +15,8 @@ def make_client(tmp_path, shop_db):
             "default_db": str(shop_db),
             "llm": {"model_name": "x", "model_provider": "groq"},
             "retrieval": {"sample_limit": 0},
-            "guardrails": {"max_rows": 100, "max_attempts": 3},
+            "guardrails": {"max_rows": 100},
+            "agent_loop": {"max_attempts": 3},
             "uploads": {"dir": str(tmp_path / "up"), "max_mb": 1},
             "checkpoint_db": str(tmp_path / "ck.db"),
         }
@@ -123,3 +124,22 @@ def test_unknown_db_404(make_client):
     c, _ = make_client(["x"])
     with c:
         assert c.post("/chat", json={"message": "q", "db_id": "nope"}).status_code == 404
+
+
+def test_old_max_attempts_location_fails_at_startup(tmp_path, shop_db):
+    cfg = {
+        "default_db": str(shop_db),
+        "llm": {"model_name": "x", "model_provider": "groq"},
+        "guardrails": {"max_rows": 100, "max_attempts": 3},
+    }
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(ValueError, match="agent_loop"):
+        create_app(str(path), llm=FakeLLM(["x"]))
+
+
+def test_agent_loop_max_attempts_is_honoured(make_client):
+    c, llm = make_client(["DELETE FROM customers"], agent_loop={"max_attempts": 2})
+    with c:
+        r = c.post("/chat", json={"message": "x"}).json()
+    assert r["attempts"] == 2 and r["failed"] is True

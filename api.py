@@ -66,6 +66,10 @@ def create_app(config_path: str = "utils/config.yaml", llm=None) -> FastAPI:
     cfg = load_config(config_path)
     pp_cfg = cfg.get("postprocess", {})
     pp_defaults = validate_names(pp_cfg.get("default_enabled", []))  # fail fast
+    if "max_attempts" in cfg.get("guardrails", {}):
+        raise ValueError(
+            "max_attempts moved from 'guardrails' to 'agent_loop' in the config."
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -85,6 +89,7 @@ def create_app(config_path: str = "utils/config.yaml", llm=None) -> FastAPI:
             provider,
             cfg.get("guardrails"),
             postprocess_cfg=pp_cfg,
+            agent_loop_cfg=cfg.get("agent_loop"),
         )
         ckpt = Path(cfg.get("checkpoint_db", "data/checkpoints.db"))
         ckpt.parent.mkdir(parents=True, exist_ok=True)

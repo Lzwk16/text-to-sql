@@ -7,7 +7,7 @@ llm:
    model_provider: "groq"
    temperature: 0
 
-# Schema context sent to the LLM
+# Schema context sent to the LLM, currently still WIP
 retrieval:
    sample_limit: 3 # sample rows per table sent to the cloud LLM; 0 disables
    full_schema_max_tables: 8 # at or below this, send the whole schema
@@ -16,10 +16,12 @@ retrieval:
    sparse_weight: 0.7
    embedding_model: "all-MiniLM-L6-v2"
 
-guardrails:
+guardrails: # limits on what a query may do
    max_rows: 500
-   max_attempts: 3
    query_timeout_s: 10
+
+agent_loop: # how the generate -> execute -> retry loop behaves
+   max_attempts: 3 # SQL generation attempts per question (errors and empty results retry)
 
 uploads:
    dir: "temp_uploads"
