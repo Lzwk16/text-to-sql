@@ -45,3 +45,14 @@ postprocess:
          USD: 1.35
          EUR: 1.45
          GBP: 1.70
+   units: # '5 kg', '30 cm', '98 °F' -> one target unit per dimension (pint)
+      targets:
+         length: km
+         mass: kg
+         volume: l
+         temperature: C # C or F
+   durations: # '2h 30m', '1:30:00' -> one target unit
+      target: minutes # seconds, minutes, hours or days
+   numbers: {} # '1,234.50', '1.2K', '(123)' -> plain numbers
+   datetime: # '05/10/1973', '01/01/2023 0:00' -> ISO 8601 text
+      dayfirst: true # reading of ambiguous numeric dates; false = month first

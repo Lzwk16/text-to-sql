@@ -1,7 +1,7 @@
 # Text to SQL Query AI Assistant Converter
 
 This repository consists of a simple application powered by Streamlit that
-utilises a locally powered Large Language Model that generates SQL querys from
+utilises an open source Large Language Model that generates SQL querys from
 natural laugange input. It allows you to efficiently create SQl queries to
 provide downstream data analysis for business users and stakeholders, through a read-only agent that answers plain-English questions about any SQLite `.db` file by writing, validating and running SQL for you.
 
@@ -66,7 +66,7 @@ Repository layout:
 │   ├── guardrails.py           # sqlglot SELECT-only validation, LIMIT cap
 │   ├── executor.py             # read-only SQLite connection, query timeout
 │   ├── retriever.py            # per-database schema context (full or hybrid retrieval)
-│   └── postprocess/            # optional numeric converters (e.g. currency)
+│   └── postprocess/            # optional converters: currency, units (pint), durations, numbers, datetime; per-database detection
 ├── utils/
 │   ├── config.yaml             # all settings
 │   ├── llm.py                  # builds the chat model (Groq by default)
@@ -119,7 +119,7 @@ Edit `utils/config.yaml` for everything else:
 | `agent_loop` | `max_attempts`: SQL generation attempts per question. |
 | `uploads` | `dir`, `max_mb`, `ttl_hours` (uploads unused for this long are deleted), `cleanup_interval_min` (how often the server checks for expired uploads). |
 | `checkpoint_db` | SQLite file for conversation history. |
-| `postprocess` | `default_enabled` converters and per-converter settings such as currency rates. |
+| `postprocess` | `default_enabled` converters and per-converter settings: currency rates, unit targets, duration target, date order. |
 
 Uploaded files survive a server restart: at startup the server re-registers files in `uploads.dir`, so existing `db_id` values keep working, and deletes any older than `ttl_hours`. The same cleanup runs every `cleanup_interval_min` minutes and after each upload. An upload counts as expired `ttl_hours` after it was last used (any schema or chat request) or saved, whichever is later. Last use is tracked in memory only, so after a restart the age falls back to when the file was saved.
 
@@ -146,7 +146,20 @@ curl -X POST http://127.0.0.1:8000/chat \
   -d '{"message": "How many rows are in each table?"}'
 ```
 
-**Numeric conversions.** Some databases store numbers as text, such as `USD$ 12.30`. Pick converters in the sidebar multi-select, or send `"conversions": ["currency"]` to `/chat`. Each converter detects its own columns and does nothing when a result has none. Conversions change only the returned rows, never your database. They help only when the query returns the raw text column, because an aggregate such as `AVG(price)` runs in SQLite on the text before conversion.
+**Conversions.** Some databases store values as text: `USD$ 12.30`, `5 kg`, `2h 30m`, `1.2K`, `05/10/1973`. Converters turn them into plain numbers (or ISO 8601 dates) so sums, averages, sorting and comparisons are correct. Conversions are off by default. Choose them in the sidebar, or send `"conversions": ["auto"]` to `/chat`.
+
+| Converter | Reads | Converts to |
+|---|---|---|
+| `currency` | `USD$ 12.30` | number in the base currency (static rates in `config.yaml`) |
+| `units` | `5 kg`, `30 cm`, `98 °F` (length, mass, volume, temperature; uses [pint](https://pint.readthedocs.io/)) | one target unit per dimension |
+| `durations` | `2h 30m`, `90 min`, `1:30:00` | one target unit (minutes by default) |
+| `numbers` | `1,234.50`, `1.2K`, `3M`, `(123)` | plain numbers |
+| `datetime` | `05/10/1973`, `01/01/2023 0:00`, `12 Mar 2024` | ISO 8601 text (`1973-10-05`) |
+
+- **Auto-detect** (`"auto"`) scans up to 200 sampled values of every text column once per database and turns on only the converters that recognise a column. The sidebar lists the detected columns. Databases without such columns are unaffected.
+- **They also work inside the SQL.** Each enabled converter is available to the model as a SQLite function (`convert_currency`, `convert_units`, `convert_durations`, `convert_numbers`, `convert_datetime`), and the prompt tells the model which columns to use it on. If the model aggregates, sorts or compares a detected column raw, the query is sent back for a retry, because comparing text such as `31/08/2023 9:58` gives wrong answers that look right.
+- **Settings.** Pick target units, the currency, the duration unit and the date order (day first or month first) in the sidebar, or send `"conversion_options": {"units": {"length": "mi"}}`. See `GET /conversions` for the choices.
+- Conversions change only returned values and never your database. Ambiguous values are left alone: a column that mixes day-first and month-first dates is not converted, and a lone `5 m` is metres, not minutes.
 
 **Privacy.** Groq is a cloud API. The schema, sample rows (`retrieval.sample_limit`) and up to 20 result rows are sent to it. Do not upload data you cannot share with a third party.
 
@@ -172,10 +185,10 @@ Reports that the backend is running.
 
 ### GET /conversions
 
-Lists the configured numeric converters, for the UI multi-select.
+Lists the configured converters and their settings, for the UI.
 
 - **Request Body / Inputs**: none
-- **Response / Expected Output**: `{"available": [{"name", "label"}], "default": [names]}`
+- **Response / Expected Output**: `{"available": [{"name", "label", "options": [{"key", "label", "choices", "default"}]}], "default": [names]}`. The first entry, `auto`, has no options.
 
 ### POST /upload-db
 
@@ -189,13 +202,13 @@ Validates and stores an uploaded SQLite file, and returns its identifier. Invali
 Lists the tables of a database. An unknown `db_id` returns 404.
 
 - **Request Body / Inputs**: query parameter `db_id` (optional, defaults to the sample database)
-- **Response / Expected Output**: `{"tables": [{"name", "columns": [..], "rows": int}]}`
+- **Response / Expected Output**: `{"tables": [{"name", "columns": [..], "rows": int}], "convertible": [{"table", "column", "converter"}]}`
 
 ### POST /chat
 
 Runs the agent for one question. An unknown `db_id` returns 404, an unknown conversion name returns 400, and a workflow error returns 500.
 
-- **Request Body / Inputs**: `{"message": str, "thread_id": str?, "db_id": str?, "conversions": [str]?}`. Omit `conversions` to use `postprocess.default_enabled`.
+- **Request Body / Inputs**: `{"message": str, "thread_id": str?, "db_id": str?, "conversions": [str]?, "conversion_options": {name: {key: value}}?}`. Names are `auto` or converter names; omit `conversions` to use `postprocess.default_enabled`. An invalid name, option or value returns 400.
 - **Response / Expected Output**: `{"thread_id", "answer", "sql", "columns", "rows", "truncated", "failed", "declined", "conversions_applied": [{"column", "converter", "detail"}], "attempts", "trace"}`
 
 ## Known limitations

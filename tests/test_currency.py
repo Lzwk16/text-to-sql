@@ -66,8 +66,15 @@ def test_registry_rejects_unknown_name():
 
 
 def test_available_lists_configured_converters():
-    assert available(PP_CFG) == [
-        {"name": "currency", "label": "Currency values (convert to SGD)"}
+    got = available(PP_CFG)
+    assert [(a["name"], a["label"]) for a in got] == [
+        ("auto", "Auto-detect from this database"),
+        ("currency", "Currency values (convert to SGD)"),
+    ]
+    assert got[0]["options"] == []
+    assert got[1]["options"] == [
+        {"key": "base_currency", "label": "Convert currency to",
+         "choices": ["SGD", "USD"], "default": "SGD"}
     ]
     assert available({}) == []
 
@@ -153,7 +160,7 @@ def test_conversions_endpoint(make_client, shop_db):
     with c:
         body = c.get("/conversions").json()
     assert body["default"] == ["currency"]
-    assert body["available"][0]["name"] == "currency"
+    assert [a["name"] for a in body["available"]] == ["auto", "currency"]
 
 
 def test_bad_default_fails_at_startup(tmp_path, shop_db):

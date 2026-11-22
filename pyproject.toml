@@ -42,6 +42,7 @@ dependencies = [
     "faiss-cpu",
     "rank-bm25",
     "sentence-transformers",
+    "pint>=0.24.4",
 ]
 
 [project.urls]
