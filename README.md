@@ -116,7 +116,7 @@ Edit `utils/config.yaml` for everything else:
 | `llm` | `model_name`, `model_provider` (`groq`), `temperature`. |
 | `retrieval` | `sample_limit` (sample rows per table sent to the LLM, `0` disables), `full_schema_max_tables`, `k`, hybrid weights, embedding model. The hybrid settings apply only to databases above the table cutoff and are experimental; see Known limitations. |
 | `guardrails` | `max_rows`, `query_timeout_s`. |
-| `agent_loop` | `max_attempts`: SQL generation attempts per question. |
+| `agent_loop` | `max_attempts`: SQL generation attempts per question. `history_turns`: earlier turns shown to the model for follow-up questions (default 5, `0` turns it off). |
 | `uploads` | `dir`, `max_mb`, `ttl_hours` (uploads unused for this long are deleted), `cleanup_interval_min` (how often the server checks for expired uploads). |
 | `checkpoint_db` | SQLite file for conversation history. |
 | `postprocess` | `default_enabled` converters and per-converter settings: currency rates, unit targets, duration target, date order. |
@@ -145,6 +145,8 @@ curl -X POST http://127.0.0.1:8000/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "How many rows are in each table?"}'
 ```
+
+**Follow-up questions.** Within one conversation you can refer back to earlier questions: "Now only Orchard", "And how many bookings does it have?". The model is shown your last few questions with the SQL that answered them (never the result rows). A new conversation, or loading another database, starts with no history. Set `agent_loop.history_turns` in `utils/config.yaml` to change how many turns are shown, or `0` to turn it off.
 
 **Conversions.** Some databases store values as text: `USD$ 12.30`, `5 kg`, `2h 30m`, `1.2K`, `05/10/1973`. Converters turn them into plain numbers (or ISO 8601 dates) so sums, averages, sorting and comparisons are correct. Conversions are off by default. Choose them in the sidebar, or send `"conversions": ["auto"]` to `/chat`.
 

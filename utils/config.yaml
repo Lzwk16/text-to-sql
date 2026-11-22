@@ -22,6 +22,7 @@ guardrails: # limits on what a query may do
 
 agent_loop: # how the generate -> execute -> retry loop behaves
    max_attempts: 3 # SQL generation attempts per question (errors and empty results retry)
+   history_turns: 5 # earlier turns shown to the model for follow-up questions; 0 = off
 
 uploads:
    dir: "temp_uploads"

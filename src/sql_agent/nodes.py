@@ -51,6 +51,7 @@ class AgentNodes:
         self.schema = schema_provider
         self.max_rows = cfg.get("max_rows", 500)
         self.max_attempts = loop.get("max_attempts", 3)
+        self.history_turns = int(loop.get("history_turns", 5))
         self.timeout_s = cfg.get("query_timeout_s", 10)
         self.prompt_template = prompt_template or prompts.load("generate_sql")
         self.summary_rows = summary_rows
@@ -156,6 +157,26 @@ class AgentNodes:
                 )
         return out
 
+    # -- conversation history ---------------------------------------------
+    def _history_block(self, state: AgentState) -> str:
+        """Last few successful turns on this database, for follow-up questions."""
+        if self.history_turns <= 0:
+            return ""
+        same_db = [
+            h for h in (state.get("history") or []) if h.get("db_id") == state.get("db_id")
+        ]
+        turns = same_db[-self.history_turns :]
+        if not turns:
+            return ""
+        lines = []
+        for i, h in enumerate(turns, 1):
+            cols = ", ".join(h.get("columns") or [])
+            lines.append(
+                f"{i}. Question: {h['question']}\n   SQL: {h['sql']}\n"
+                f"   Returned {h.get('row_count', 0)} rows with columns: {cols}"
+            )
+        return prompts.render("history", turns="\n".join(lines))
+
     # -- nodes -----------------------------------------------------------
     async def generate_sql(self, state: AgentState) -> dict:
         question = state.get("question") or state["messages"][-1].content
@@ -165,6 +186,7 @@ class AgentNodes:
         db_schema = "\n\n".join(t.render() for t in shown)
         converters, detected = self._active(state)
         hints = self._hints(converters, detected, {t.name for t in shown})
+        history = self._history_block(state)
 
         feedback = ""
         if state.get("error"):
@@ -178,6 +200,7 @@ class AgentNodes:
                 db_schema=schema_text,
                 feedback=feedback,
                 conversion_hints=conversion_hints,
+                history=history,
             )
             response = await self.llm.ainvoke([HumanMessage(content=prompt)])
             return _THINK_RE.sub("", str(response.content))
@@ -284,7 +307,20 @@ class AgentNodes:
         )
         response = await self.llm.ainvoke([HumanMessage(content=prompt)])
         answer = str(response.content).strip()
-        return {"answer": answer, "messages": [AIMessage(content=answer)]}
+        update: dict = {"answer": answer, "messages": [AIMessage(content=answer)]}
+        if self.history_turns > 0:
+            # Only successful turns reach summarize. Keep a bounded tail so the saved
+            # state does not grow without limit; all databases share one list, and
+            # _history_block filters by db_id.
+            entry = {
+                "db_id": state.get("db_id"),
+                "question": state["question"],
+                "sql": state.get("sql", "")[:1000],
+                "columns": [str(c) for c in state.get("columns", [])],
+                "row_count": len(rows),
+            }
+            update["history"] = [*(state.get("history") or []), entry][-50:]
+        return update
 
     async def give_up(self, state: AgentState) -> dict:
         answer = (
