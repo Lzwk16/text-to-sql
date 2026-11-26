@@ -1,6 +1,7 @@
 """Graph nodes: generate -> validate+execute -> (retry | summarize)."""
 
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -29,6 +30,13 @@ DECLINE_MESSAGE = (
     "I can only answer read-only questions about the data in this database, "
     "so I can't help with that request. Try asking about the contents of the tables."
 )
+# Per-turn limits for conversation history (characters).
+MAX_HISTORY_SQL = 2000
+MAX_HISTORY_QUESTION = 500
+# On partial schemas, tables used by this many recent turns are added to the
+# prompt, up to this many characters of schema text.
+HISTORY_TABLE_TURNS = 2
+MAX_HISTORY_SCHEMA = 10000
 
 
 class AgentNodes:
@@ -90,10 +98,14 @@ class AgentNodes:
             for d in detected
             if d.table in tables and d.converter in by_name
         ]
-        return prompts.render("conversion_hints", lines="\n".join(lines)) if lines else ""
+        if not lines:
+            return ""
+        return prompts.render("conversion_hints", lines="\n".join(lines))
 
     @staticmethod
-    def _raw_usage(sql: str, detected: List[Detected], converters: List[Converter]) -> str:
+    def _raw_usage(
+        sql: str, detected: List[Detected], converters: List[Converter]
+    ) -> str:
         """Error text if SQL aggregates, sorts or compares a detected column raw.
 
         MIN/MAX/ORDER BY on text like '31/08/2023 9:58' compares characters, not
@@ -112,7 +124,10 @@ class AgentNodes:
                                   exp.GT, exp.GTE, exp.LT, exp.LTE, exp.Between):
             operands = (
                 [node.this]
-                if isinstance(node, (exp.Min, exp.Max, exp.Avg, exp.Sum, exp.Ordered, exp.Between))
+                if isinstance(
+                    node,
+                    (exp.Min, exp.Max, exp.Avg, exp.Sum, exp.Ordered, exp.Between),
+                )
                 else [node.this, node.expression]
             )
             for op in operands:
@@ -149,33 +164,127 @@ class AgentNodes:
                 continue
             arg = call.expressions[0]
             column = arg.sql(dialect="sqlite")
-            sample = examples.get(arg.name.lower()) if isinstance(arg, exp.Column) else None
+            sample = (
+                examples.get(arg.name.lower()) if isinstance(arg, exp.Column) else None
+            )
             if (column, conv.name) not in seen:
                 seen.add((column, conv.name))
                 out.append(
-                    Applied(column.strip('"'), conv.name, f"{conv.describe(sample)} (in SQL)")
+                    Applied(
+                        column.strip('"'),
+                        conv.name,
+                        f"{conv.describe(sample)} (in SQL)",
+                    )
                 )
         return out
 
     # -- conversation history ---------------------------------------------
-    def _history_block(self, state: AgentState) -> str:
-        """Last few successful turns on this database, for follow-up questions."""
+    def _db_identity(self, state: AgentState) -> Tuple[Optional[str], str]:
+        """(db key, file path) naming the request's database.
+
+        ``None`` and ``"default"`` are the same database, and the resolved path
+        guards against ``default_db`` pointing at a different file after a
+        restart (a relative or absolute spelling of the same file still matches).
+        """
+        key = state.get("db_id") or self.registry.default_id
+        return key, str(Path(self.registry.resolve(state.get("db_id"))).resolve())
+
+    def _history_turns(self, state: AgentState) -> List[Dict[str, Any]]:
+        """Last few successful turns on this database, oldest first."""
         if self.history_turns <= 0:
-            return ""
+            return []
+        key, path = self._db_identity(state)
         same_db = [
-            h for h in (state.get("history") or []) if h.get("db_id") == state.get("db_id")
+            h
+            for h in (state.get("history") or [])
+            if h.get("db_id") == key and h.get("db_path") == path
         ]
-        turns = same_db[-self.history_turns :]
+        return same_db[-self.history_turns :]
+
+    @classmethod
+    def _history_block(
+        cls, turns: List[Dict[str, Any]], available: Optional[set] = None
+    ) -> str:
+        """Prompt text listing earlier turns, for follow-up questions.
+
+        ``available`` holds the ``convert_*`` SQL functions registered this turn;
+        earlier SQL calling any other one would fail with "no such function".
+        """
         if not turns:
             return ""
         lines = []
         for i, h in enumerate(turns, 1):
             cols = ", ".join(h.get("columns") or [])
-            lines.append(
-                f"{i}. Question: {h['question']}\n   SQL: {h['sql']}\n"
-                f"   Returned {h.get('row_count', 0)} rows with columns: {cols}"
+            sql = h.get("sql") or "(not shown: too long to repeat)"
+            count = h.get("row_count", 0)
+            if h.get("truncated"):
+                # Reaching the cap may also be a complete result of that size.
+                count = f"{count} rows (the row cap, so there may be more)"
+            else:
+                count = f"{count} rows"
+            line = (
+                f"{i}. Question: {h['question']}\n   SQL: {sql}\n"
+                f"   Returned {count} with columns: {cols}"
             )
+            missing = sorted(cls._convert_calls(h.get("sql")) - (available or set()))
+            if missing:
+                line += (
+                    f"\n   Note: {', '.join(missing)} is not available now; "
+                    "use the raw column instead."
+                )
+            lines.append(line)
         return prompts.render("history", turns="\n".join(lines))
+
+    @staticmethod
+    def _convert_calls(sql: Optional[str]) -> set:
+        """Lower-cased ``convert_*`` function names a query calls."""
+        if not sql or "convert_" not in sql.lower():
+            return set()
+        try:
+            tree = sqlglot.parse_one(sql, read="sqlite")
+        except sqlglot.errors.SqlglotError:
+            return set()
+        if tree is None:
+            return set()
+        names = (str(f.name).lower() for f in tree.find_all(exp.Anonymous))
+        return {n for n in names if n.startswith("convert_")}
+
+    @staticmethod
+    def _sql_tables(sql: str) -> List[str]:
+        """Lower-cased table names a query reads (CTE names included)."""
+        try:
+            tree = sqlglot.parse_one(sql or "", read="sqlite")
+        except sqlglot.errors.SqlglotError:
+            return []
+        if tree is None:
+            return []
+        return list(dict.fromkeys(t.name.lower() for t in tree.find_all(exp.Table)))
+
+    def _with_history_tables(
+        self, shown: list, turns: List[Dict[str, Any]], all_tables: list
+    ) -> list:
+        """``shown`` plus the tables the most recent turns used, size-capped.
+
+        Retrieval sees only the new text ("now only Paris"), so a follow-up would
+        otherwise lose the tables its earlier SQL used. Newest turn first, so the
+        cap keeps the tables most likely referred to.
+        """
+        by_name = {t.name.lower(): t for t in all_tables}
+        have = {t.name.lower() for t in shown}
+        added, size = [], 0
+        for h in reversed(turns[-HISTORY_TABLE_TURNS:]):
+            # Saved at the end of the turn; older entries only have the SQL.
+            for name in h.get("tables") or self._sql_tables(h.get("sql", "")):
+                table = by_name.get(name)
+                if table is None or name in have:
+                    continue  # CTE alias or already shown
+                cost = len(table.render()) + 2
+                if size + cost > MAX_HISTORY_SCHEMA:
+                    continue  # too big; a smaller table may still fit
+                size += cost
+                added.append(table)
+                have.add(name)
+        return shown + added
 
     # -- nodes -----------------------------------------------------------
     async def generate_sql(self, state: AgentState) -> dict:
@@ -183,10 +292,15 @@ class AgentNodes:
         db_path = str(self.registry.resolve(state.get("db_id")))
         key = state.get("db_id") or self.registry.default_id
         shown = self.schema.select_tables(key, db_path, question)
+        turns = self._history_turns(state)
+        if turns and self.schema.is_partial(key, db_path):
+            shown = self._with_history_tables(
+                shown, turns, self.schema.tables(key, db_path)
+            )
         db_schema = "\n\n".join(t.render() for t in shown)
         converters, detected = self._active(state)
         hints = self._hints(converters, detected, {t.name for t in shown})
-        history = self._history_block(state)
+        history = self._history_block(turns, {c.sql_name for c in converters})
 
         feedback = ""
         if state.get("error"):
@@ -258,6 +372,7 @@ class AgentNodes:
             "attempts": attempts,
             "error": None,
             "sql": safe_sql,
+            "model_sql": sql,  # without the injected LIMIT, for follow-ups
             "columns": list(df.columns),
             "rows": clean.to_dict("records"),
             "truncated": len(df) >= self.max_rows,
@@ -302,22 +417,45 @@ class AgentNodes:
             note=note,
             question=state["question"],
             row_count=len(rows),
+            # Without this the model reports the capped count as the total.
+            capped=(
+                prompts.render("row_cap_note", row_count=len(rows))
+                if state.get("truncated")
+                else ""
+            ),
             shown=self.summary_rows,
             sample=sample,
         )
         response = await self.llm.ainvoke([HumanMessage(content=prompt)])
         answer = str(response.content).strip()
         update: dict = {"answer": answer, "messages": [AIMessage(content=answer)]}
+        identity = None
         if self.history_turns > 0:
+            try:
+                identity = self._db_identity(state)
+            except KeyError:  # upload cleaned up after the query ran: still answer
+                identity = None
+        if identity is not None:
             # Only successful turns reach summarize. Keep a bounded tail so the saved
             # state does not grow without limit; all databases share one list, and
-            # _history_block filters by db_id.
+            # _history_turns filters by database.
+            key, path = identity
+            question = state["question"]
+            if len(question) > MAX_HISTORY_QUESTION:
+                question = question[:MAX_HISTORY_QUESTION].rstrip() + " ..."
+            # Save the model's own SQL: the guardrail's LIMIT would cap follow-ups
+            # that build on it. Too-long SQL is dropped, never cut mid-statement.
+            sql = state.get("model_sql") or state.get("sql", "")
             entry = {
-                "db_id": state.get("db_id"),
-                "question": state["question"],
-                "sql": state.get("sql", "")[:1000],
+                "db_id": key,
+                "db_path": path,
+                "question": question,
+                "sql": sql if len(sql) <= MAX_HISTORY_SQL else "",
+                # Kept even when the SQL text is dropped, for follow-ups.
+                "tables": self._sql_tables(sql),
                 "columns": [str(c) for c in state.get("columns", [])],
                 "row_count": len(rows),
+                "truncated": bool(state.get("truncated")),
             }
             update["history"] = [*(state.get("history") or []), entry][-50:]
         return update
@@ -327,7 +465,11 @@ class AgentNodes:
             f"I couldn't produce a working query after {state.get('attempts', 0)} "
             f"attempts. Last problem: {state.get('error')}"
         )
-        return {"answer": answer, "failed": True, "messages": [AIMessage(content=answer)]}
+        return {
+            "answer": answer,
+            "failed": True,
+            "messages": [AIMessage(content=answer)],
+        }
 
     async def decline(self, state: AgentState) -> dict:
         """Request can't be answered read-only: no query, no rows, no retry."""

@@ -10,7 +10,8 @@ class AgentState(TypedDict, total=False):
     messages: Annotated[List[BaseMessage], add_messages]
     db_id: Optional[str]
     question: str
-    sql: str
+    sql: str  # the query that ran (after guardrails)
+    model_sql: str  # the query as the model wrote it; saved to history
     error: Optional[str]  # guardrail/execution/empty-result feedback for retries
     attempts: int
     columns: List[str]

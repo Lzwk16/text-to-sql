@@ -177,6 +177,7 @@ def create_app(config_path: str = "utils/config.yaml", llm=None) -> FastAPI:
             "question": req.message,
             "db_id": req.db_id,
             "sql": "",
+            "model_sql": "",
             "error": None,
             "attempts": 0,
             "rows": [],
