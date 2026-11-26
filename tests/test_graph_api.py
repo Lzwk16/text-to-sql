@@ -143,3 +143,27 @@ def test_agent_loop_max_attempts_is_honoured(make_client):
     with c:
         r = c.post("/chat", json={"message": "x"}).json()
     assert r["attempts"] == 2 and r["failed"] is True
+
+
+def test_summary_is_told_when_the_result_was_capped(make_client):
+    many = (
+        "SELECT 1 AS n FROM customers a, customers b, customers c, customers d, "
+        "customers e, customers f, customers g"
+    )  # 2^7 = 128 rows, capped at max_rows = 100
+    c, llm = make_client([many, "Lots of rows."])
+    with c:
+        r = c.post("/chat", json={"message": "list them"}).json()
+    assert r["truncated"] is True
+    summary = llm.prompts[-1]
+    assert "Rows returned: 100" in summary
+    assert "the row limit" in summary and "do not state 100 as the total" in summary
+
+
+def test_summary_has_no_cap_note_when_the_result_is_complete(make_client):
+    c, llm = make_client(
+        ["SELECT city, COUNT(*) AS n FROM customers GROUP BY city", "Two cities."]
+    )
+    with c:
+        r = c.post("/chat", json={"message": "customers per city"}).json()
+    assert r["truncated"] is False
+    assert "row limit" not in llm.prompts[-1]
